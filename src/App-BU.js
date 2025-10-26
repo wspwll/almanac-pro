@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, Suspense, lazy } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   BrowserRouter,
   Routes,
@@ -16,37 +16,30 @@ import {
   Moon,
 } from "lucide-react";
 
-/* -------------------- Lazy-loaded pages -------------------- */
-const Welcome = lazy(() => import("./pages/Welcome"));
-const MarketSimulation = lazy(() => import("./pages/MarketSimulation"));
-const CustomerGroups = lazy(() => import("./pages/CustomerGroups"));
-const ProductSentiments = lazy(() => import("./pages/ProductSentiments"));
-const LegalNotice = lazy(() => import("./pages/LegalNotice"));
-
 /* -------------------- Themes -------------------- */
 const THEME_PALETTES = {
   dark: {
     name: "dark",
-    // Match risk app
-    bg: "#0f172a", // page background
-    panel: "#111827", // panels/cards/sidebar background
-    text: "#e5e7eb", // primary text
-    muted: "#9ca3af", // secondary text
-    border: "#374151", // borders/dividers
-    accent: "#FF5432", // Scout harvest orange
-    accent2: "#FF5432",
-    linkActiveBg: "rgba(255, 84, 50, 0.15)", // active nav highlight
+    bg: "#0B1720", // page background
+    panel: "#11232F", // sidebar/panel background
+    text: "#EAEAEA", // primary text
+    muted: "#A7B1B6", // secondary text
+    border: "#163645", // borders/dividers
+    accent: "#FF5432", // harvest orange
+    accent2: "#FF5432", // active border accent
+    // Active highlight: same opacity as prior blue, recolored to orange
+    linkActiveBg: "rgba(255, 84, 50, 0.15)",
   },
   light: {
     name: "light",
-    // Match risk app light
-    bg: "#f6f8fb",
-    panel: "#ffffff",
-    text: "#0b1220",
-    muted: "#6b7280",
-    border: "#e5e7eb",
+    bg: "#F7FAFC",
+    panel: "#FFFFFF",
+    text: "#12212B",
+    muted: "#5E6A71",
+    border: "#E3E8EF",
     accent: "#FF5432",
     accent2: "#FF5432",
+    // Keep the same translucent feel in light mode too
     linkActiveBg: "rgba(255, 84, 50, 0.15)",
   },
 };
@@ -77,50 +70,26 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <Suspense fallback={<div style={{ padding: 24 }}>Loading…</div>}>
-        <Routes>
-          <Route
-            element={
-              <Layout theme={theme} setTheme={setTheme} COLORS={COLORS} />
-            }
-          >
-            {/* shared sidebar */}
-            <Route
-              index
-              element={<Welcome COLORS={COLORS} useStyles={useStyles} />}
-            />
-            <Route
-              path="market-simulation"
-              element={
-                <MarketSimulation COLORS={COLORS} useStyles={useStyles} />
-              }
-            />
-            <Route
-              path="customer-groups"
-              element={<CustomerGroups COLORS={COLORS} useStyles={useStyles} />}
-            />
-            <Route
-              path="product-sentiments"
-              element={
-                <ProductSentiments COLORS={COLORS} useStyles={useStyles} />
-              }
-            />
-            <Route
-              path="legal-notice"
-              element={<LegalNotice COLORS={COLORS} useStyles={useStyles} />}
-            />
-            {/* 404 fallback */}
-            <Route path="*" element={<NotFound COLORS={COLORS} />} />
-          </Route>
-        </Routes>
-      </Suspense>
+      <Routes>
+        <Route
+          element={<Layout theme={theme} setTheme={setTheme} COLORS={COLORS} />}
+        >
+          {/* shared sidebar */}
+          <Route index element={<DashboardPage COLORS={COLORS} />} />
+          <Route path="reports" element={<ReportsPage COLORS={COLORS} />} />
+          <Route path="models" element={<ModelsPage COLORS={COLORS} />} />
+          <Route path="settings" element={<SettingsPage COLORS={COLORS} />} />
+          {/* 404 fallback (optional) */}
+          <Route path="*" element={<NotFound COLORS={COLORS} />} />
+        </Route>
+      </Routes>
     </BrowserRouter>
   );
 }
 
 /* -------------------- Layout with Sidebar -------------------- */
 function Layout({ theme, setTheme, COLORS }) {
-  const styles = useStyles(COLORS, theme);
+  const styles = useStyles(COLORS);
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
 
   return (
@@ -140,7 +109,7 @@ function Layout({ theme, setTheme, COLORS }) {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "270px 1fr",
+          gridTemplateColumns: "230px 1fr",
           height: "100vh", // full viewport height
           background: COLORS.bg,
           color: COLORS.text,
@@ -152,15 +121,17 @@ function Layout({ theme, setTheme, COLORS }) {
             <img
               src={
                 theme === "dark"
-                  ? "/almanac-pro-fog.png"
-                  : "/almanac-pro-logo-moonstone.png"
+                  ? "/Scout-Script-Fog.png"
+                  : "/Scout-Script-Moonstone.png"
               }
               alt="Scout Logo"
-              style={{ height: 36, width: "auto" }}
+              style={{ height: 16, width: "auto" }}
             />
+
+            <span style={styles.brandText}>Almanac Pro</span>
           </div>
 
-          <nav style={{ marginTop: -5 }}>
+          <nav style={{ marginTop: 20 }}>
             <SideLink COLORS={COLORS} to="/" icon={Home} label="Welcome" end />
             <SideLink
               COLORS={COLORS}
@@ -236,7 +207,55 @@ function SideLink({ to, icon: Icon, label, end, COLORS }) {
   );
 }
 
-/* -------------------- Simple NotFound -------------------- */
+/* -------------------- Pages -------------------- */
+function DashboardPage({ COLORS }) {
+  const styles = useStyles(COLORS);
+  return (
+    <div>
+      <h1 style={styles.h1}>Dashboard</h1>
+      <p style={{ color: COLORS.muted }}>
+        Put KPIs, filters, and visualizations here.
+      </p>
+    </div>
+  );
+}
+
+function ReportsPage({ COLORS }) {
+  const styles = useStyles(COLORS);
+  return (
+    <div>
+      <h1 style={styles.h1}>Reports</h1>
+      <p style={{ color: COLORS.muted }}>
+        Static or ad-hoc reports; export buttons, etc.
+      </p>
+    </div>
+  );
+}
+
+function ModelsPage({ COLORS }) {
+  const styles = useStyles(COLORS);
+  return (
+    <div>
+      <h1 style={styles.h1}>Models</h1>
+      <p style={{ color: COLORS.muted }}>
+        Excel-type calculations, scenario inputs, outputs.
+      </p>
+    </div>
+  );
+}
+
+function SettingsPage({ COLORS }) {
+  const styles = useStyles(COLORS);
+  return (
+    <div>
+      <h1 style={styles.h1}>Settings</h1>
+      <p style={{ color: COLORS.muted }}>
+        Preferences, data connections, access control, etc.
+      </p>
+    </div>
+  );
+}
+
 function NotFound({ COLORS }) {
   const styles = useStyles(COLORS);
   return (
@@ -248,22 +267,17 @@ function NotFound({ COLORS }) {
 }
 
 /* -------------------- Styles (derived from theme) -------------------- */
-function useStyles(COLORS, theme) {
+function useStyles(COLORS) {
   return {
     sidebar: {
       background: COLORS.panel,
       color: COLORS.text,
-      padding: "16px 16px 24px",
+      borderRight: `1px solid ${COLORS.border}`,
+      padding: "16px 16px 24px", // bottom breathing room
       display: "flex",
       flexDirection: "column",
       height: "100vh",
-      boxSizing: "border-box",
-      position: "relative",
-      zIndex: 2,
-      boxShadow:
-        theme === "dark"
-          ? "6px 0 14px rgba(0,0,0,0.3)"
-          : "4px 0 12px rgba(0,0,0,0.1)",
+      boxSizing: "border-box", // keep within viewport
     },
 
     sidebarSpacer: {
@@ -273,7 +287,7 @@ function useStyles(COLORS, theme) {
       display: "flex",
       alignItems: "center",
       gap: 10,
-      padding: "20px 20px",
+      padding: "8px 6px",
     },
     brandText: {
       fontWeight: 800,
@@ -286,12 +300,12 @@ function useStyles(COLORS, theme) {
       alignItems: "center",
       gap: 10,
       borderLeft: "3px solid transparent",
-      padding: "14px 12px",
+      padding: "10px 12px",
       borderRadius: 8,
       color: COLORS.text,
       textDecoration: "none",
-      margin: "12px 0",
-      fontSize: 16,
+      margin: "4px 0",
+      fontSize: 12,
       fontWeight: 500,
       transition: "background 0.15s ease, border-color 0.15s ease",
     },
@@ -302,7 +316,7 @@ function useStyles(COLORS, theme) {
       padding: 24,
       overflowY: "auto",
     },
-    h1: { margin: 0, fontSize: 36, color: COLORS.text },
+    h1: { margin: 0, fontSize: 28, color: COLORS.text },
 
     themeToggle: {
       display: "flex",
@@ -315,7 +329,7 @@ function useStyles(COLORS, theme) {
       borderRadius: 10,
       cursor: "pointer",
       fontFamily: "inherit",
-      fontSize: 16,
+      fontSize: 14,
       fontWeight: 600,
       transition: "background 0.15s ease",
     },
