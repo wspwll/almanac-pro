@@ -325,14 +325,14 @@ export default function MarketSimulation({ COLORS, useStyles }) {
         return { key, label: key, ...s, volume: vol };
       }
       const stats = rangeStatsForKey(key, rs, re);
+      const e = edits[key] || {};
       const s = {
         ...b,
-        ...(edits[key] || {}),
-        price: stats.avgPrice,
-        fleet: stats.avgFleet,
-        lease: stats.avgLease,
-        days: stats.avgDays,
-        incentives: stats.avgIncentives,
+        price: e.price ?? stats.avgPrice,
+        fleet: e.fleet ?? stats.avgFleet,
+        lease: e.lease ?? stats.avgLease,
+        days: e.days ?? stats.avgDays,
+        incentives: e.incentives ?? stats.avgIncentives,
       };
       return { key, label: key, ...s, volume: stats.totalVolume };
     });
@@ -437,6 +437,11 @@ export default function MarketSimulation({ COLORS, useStyles }) {
     updateViewField("edits", newEdits);
   }
 
+  function resetAllCards() {
+    updateViewField("edits", {}); // clear all manual input overrides
+    updateViewField("selectedMonthIdx", null); // optional: also clear month selection
+  }
+
   /* -------------------- Styles -------------------- */
 
   const card = {
@@ -468,7 +473,7 @@ export default function MarketSimulation({ COLORS, useStyles }) {
     width: "100%",
     padding: "6px 8px",
     borderRadius: 8,
-    border: `1px solid ${COLORS.border}`,
+    border: "none",
     background: "transparent",
     color: COLORS.text,
     fontFamily: "inherit",
@@ -598,6 +603,7 @@ export default function MarketSimulation({ COLORS, useStyles }) {
 
   /* -------------------- Render -------------------- */
 
+  const hasAnyEdits = Object.keys(edits).length > 0;
   const selectedMonthLabel =
     selectedMonthIdx == null ? null : ymToLabel(monthTicks[selectedMonthIdx]);
 
@@ -619,10 +625,9 @@ export default function MarketSimulation({ COLORS, useStyles }) {
             lineHeight: 1.4,
           }}
         >
-          Toggle <strong>Segments</strong> or <strong>Powertrains</strong>. Pick
-          any categories to simulate. Edit inputs on each card — <em>Volume</em>{" "}
-          updates instantly. Click the chart to set a month and auto-fill
-          inputs.
+          Simulate market scenarios by selecting categories and adjusting key
+          drivers. Results update in real time based on your inputs and selected
+          time period.
         </p>
 
         <div style={{ marginTop: 30, marginBottom: 6 }}>
@@ -757,7 +762,7 @@ export default function MarketSimulation({ COLORS, useStyles }) {
         >
           {monthTicks.map((m, i) => (
             <option key={`s-${m}`} value={i} style={optionStyle}>
-              {m}
+              {ymToLabel(m)}
             </option>
           ))}
         </select>
@@ -791,7 +796,7 @@ export default function MarketSimulation({ COLORS, useStyles }) {
         >
           {monthTicks.map((m, i) => (
             <option key={`e-${m}`} value={i} style={optionStyle}>
-              {m}
+              {ymToLabel(m)}
             </option>
           ))}
         </select>
@@ -854,9 +859,7 @@ export default function MarketSimulation({ COLORS, useStyles }) {
           </div>
 
           <div style={kpiCard}>
-            <div style={{ color: COLORS.muted, fontSize: 18 }}>
-              Weighted ATP
-            </div>
+            <div style={{ color: COLORS.muted, fontSize: 18 }}>Price Paid</div>
             <div style={{ fontWeight: 700, fontSize: 28 }}>
               ${fmt(kpis.weightedATP, 0)}
             </div>
@@ -906,11 +909,6 @@ export default function MarketSimulation({ COLORS, useStyles }) {
             futureCutoffIdx={futureCutoffIdx}
             showFutureAsDashed={showFutureAsDashed}
             colorForKey={(label) => colorForKey(label, suvAccent, PICKUP_BLUE)}
-            title={
-              mode === "segments"
-                ? "Volume Over Time (Selected Segments)"
-                : "Volume Over Time (Selected Powertrains)"
-            }
             isDarkPanel={isDarkHex(COLORS.panel)}
           />
         </div>
@@ -949,11 +947,12 @@ export default function MarketSimulation({ COLORS, useStyles }) {
           }}
         >
           {rows.map((r) => {
-            // ✅ Add these two lines
             const c =
               getKeyColor(r.label) ||
               colorForKey(r.label, suvAccent, PICKUP_BLUE);
             const alpha = isDarkHex(COLORS.panel) ? 0.1 : 0.14;
+
+            const hasEditsForKey = !!edits[r.key];
 
             return (
               <div
@@ -968,12 +967,30 @@ export default function MarketSimulation({ COLORS, useStyles }) {
                 <div
                   style={{
                     display: "flex",
-                    alignItems: "baseline",
+                    alignItems: "center",
                     justifyContent: "space-between",
                     marginBottom: 8,
                   }}
                 >
                   <div style={{ fontWeight: 700 }}>{r.label}</div>
+
+                  {hasEditsForKey && (
+                    <button
+                      onClick={() => resetCard(r.key)}
+                      title="Reset this card"
+                      style={{
+                        padding: "4px 8px",
+                        borderRadius: 8,
+                        border: `1px solid rgba(${hexToRgb(c)}, 0.55)`,
+                        background: "transparent",
+                        color: COLORS.text,
+                        fontSize: 12,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Reset
+                    </button>
+                  )}
                 </div>
 
                 <div
@@ -994,15 +1011,18 @@ export default function MarketSimulation({ COLORS, useStyles }) {
 
                 <div style={inputRow}>
                   <div>
-                    <div style={label}>Weighted Avg Transaction Price</div>
+                    <div style={label}>Avg Price Paid</div>
                   </div>
                   <input
                     type="number"
-                    value={fmt(r.price, 0)}
+                    value={r.price}
                     onChange={(e) =>
                       handleChange(r.key, "price", e.target.value)
                     }
-                    style={number}
+                    style={{
+                      ...number,
+                      border: `1px solid rgba(${hexToRgb(c)}, 0.55)`,
+                    }}
                   />
                 </div>
 
@@ -1012,11 +1032,14 @@ export default function MarketSimulation({ COLORS, useStyles }) {
                   </div>
                   <input
                     type="number"
-                    value={fmt(r.fleet, 0)}
+                    value={r.fleet}
                     onChange={(e) =>
                       handleChange(r.key, "fleet", e.target.value)
                     }
-                    style={number}
+                    style={{
+                      ...number,
+                      border: `1px solid rgba(${hexToRgb(c)}, 0.55)`,
+                    }}
                   />
                 </div>
 
@@ -1026,11 +1049,14 @@ export default function MarketSimulation({ COLORS, useStyles }) {
                   </div>
                   <input
                     type="number"
-                    value={fmt(r.lease, 0)}
+                    value={r.lease}
                     onChange={(e) =>
                       handleChange(r.key, "lease", e.target.value)
                     }
-                    style={number}
+                    style={{
+                      ...number,
+                      border: `1px solid rgba(${hexToRgb(c)}, 0.55)`,
+                    }}
                   />
                 </div>
 
@@ -1040,11 +1066,14 @@ export default function MarketSimulation({ COLORS, useStyles }) {
                   </div>
                   <input
                     type="number"
-                    value={fmt(r.days, 0)}
+                    value={r.days}
                     onChange={(e) =>
                       handleChange(r.key, "days", e.target.value)
                     }
-                    style={number}
+                    style={{
+                      ...number,
+                      border: `1px solid rgba(${hexToRgb(c)}, 0.55)`,
+                    }}
                   />
                 </div>
 
@@ -1054,11 +1083,14 @@ export default function MarketSimulation({ COLORS, useStyles }) {
                   </div>
                   <input
                     type="number"
-                    value={fmt(r.incentives, 0)}
+                    value={r.incentives}
                     onChange={(e) =>
                       handleChange(r.key, "incentives", e.target.value)
                     }
-                    style={number}
+                    style={{
+                      ...number,
+                      border: `1px solid rgba(${hexToRgb(c)}, 0.55)`,
+                    }}
                   />
                 </div>
               </div>
@@ -1101,7 +1133,6 @@ function LineChartGeneric(props) {
     futureCutoffIdx,
     showFutureAsDashed,
     colorForKey,
-    title = "Volume Over Time",
     isDarkPanel,
   } = props;
 
@@ -1208,8 +1239,6 @@ function LineChartGeneric(props) {
         position: "relative",
       }}
     >
-      <div style={{ color: COLORS.muted, marginBottom: 8 }}>{title}</div>
-
       {/* Legend */}
       {legendItems.length > 0 && (
         <div
@@ -1218,7 +1247,9 @@ function LineChartGeneric(props) {
             flexWrap: "wrap",
             gap: 10,
             alignItems: "center",
-            marginBottom: 6,
+            marginTop: 8,
+            marginBottom: 0,
+            marginLeft: padL,
           }}
         >
           {legendItems.map((it) => (
@@ -1235,9 +1266,7 @@ function LineChartGeneric(props) {
                   background: it.color,
                 }}
               />
-              <span style={{ fontSize: 12, color: COLORS.muted }}>
-                {it.key}
-              </span>
+              <span style={{ fontSize: 16, color: "#FFFFF" }}>{it.key}</span>
             </div>
           ))}
         </div>
@@ -1255,18 +1284,22 @@ function LineChartGeneric(props) {
           style={{ display: "block", cursor: "crosshair" }}
         >
           {/* Future projection background */}
-          {showFutureAsDashed && futureCutoffIdx < re && (
-            <rect
-              x={mapX(Math.max(rs, futureCutoffIdx + 1))}
-              y={padT}
-              width={Math.max(
-                1,
-                mapX(re) - mapX(Math.max(rs, futureCutoffIdx + 1))
-              )}
-              height={h - padT - padB}
-              fill={isDarkPanel ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)"}
-            />
-          )}
+          {showFutureAsDashed &&
+            futureCutoffIdx < re &&
+            (() => {
+              const shadeStartIdx = Math.max(rs, futureCutoffIdx); // ← place it HERE
+              return (
+                <rect
+                  x={mapX(shadeStartIdx)}
+                  y={padT}
+                  width={Math.max(1, mapX(re) - mapX(shadeStartIdx))}
+                  height={h - padT - padB}
+                  fill={
+                    isDarkPanel ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)"
+                  }
+                />
+              );
+            })()}
 
           {/* Axes */}
           <line
@@ -1299,9 +1332,9 @@ function LineChartGeneric(props) {
                 y={h - padB + 16}
                 fontSize="10"
                 textAnchor="middle"
-                fill={COLORS.muted}
+                fill={COLORS.text}
               >
-                {monthTicks[ti]}
+                {ymToLabel(monthTicks[ti])}
               </text>
             </g>
           ))}
