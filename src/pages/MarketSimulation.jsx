@@ -2,26 +2,47 @@
 import React, { useMemo, useState } from "react";
 
 /**
- * Market Simulation (Segments / Powertrains)
- * - Segment pills: SUVs (S/M/L/XL) over Pickups (S/M/L/XL), compact chips
- * - KPIs + Segments line chart:
- *    • Legend (top), taller chart, precise hover mapping
- *    • Tooltip shows Month/Year + per-segment volumes
- *    • Vertical hover guide + persistent selected guide on click
- *    • Date range selectors (Start/End) + Reset range
- *    • Clear selected month button
- * - Clicking a month applies that month’s (dummy) values to the cards below
- * - KPIs recompute based on the visible date range in Segments mode
- * - FUTURE: range extends to 2040-01; portions after 2025-08 render dashed if range crosses into future
+ * Market Simulation (Segments / Powertrains) — Unified
+ * - Both modes now have:
+ *    • Range-aware KPIs
+ *    • Date range selectors + Reset range + Clear selection
+ *    • Line chart with hover + click-to-select month
+ *    • Future beyond cutoff rendered with dashed bridge
+ *    • Cards that use range averages when no month is selected,
+ *      or snapshot for the selected month when it is
+ * - State persists per-mode while you switch tabs. Your selections,
+ *   inputs, and date range remain until you refresh or leave the page.
  */
+
+const SUV_COLORS = {
+  "S SUV": "#FFD32A",
+  "M SUV": "#FF9B1A",
+  "L SUV": "#FF4A32",
+  "XL SUV": "#C21807",
+};
+
+const PICKUP_COLORS = {
+  "S Pickup": "#1BD15C",
+  "M Pickup": "#00A890",
+  "L Pickup": "#1F6FFF",
+  "XL Pickup": "#7A2AEF",
+};
+
+const PT_COLORS = {
+  ICE: "#6B7280",
+  HEV: "#10B981",
+  PHEV: "#F59E0B",
+  BEV: "#3B82F6",
+};
+
+function getKeyColor(label) {
+  return SUV_COLORS[label] || PICKUP_COLORS[label] || PT_COLORS[label] || null;
+}
 
 export default function MarketSimulation({ COLORS, useStyles }) {
   const styles = useStyles(COLORS);
-  // Style for <option> elements inside dark mode dropdowns
-  const optionStyle = {
-    background: COLORS.panel,
-    color: COLORS.text,
-  };
+
+  const optionStyle = { background: COLORS.panel, color: COLORS.text };
 
   const isDarkHex = (hex) => {
     const h = hex?.replace("#", "");
@@ -46,8 +67,13 @@ export default function MarketSimulation({ COLORS, useStyles }) {
 
   /* -------------------- Definitions -------------------- */
 
-  const PICKUP_BLUE = "#60B6FF"; // light blue for pickups (pairs with #FF5432)
+  const PICKUP_BLUE = "#60B6FF";
   const suvAccent = COLORS.accent;
+
+  const DEFAULT_SELECTED = {
+    segments: ["M SUV", "L Pickup"],
+    powertrains: ["ICE", "HEV", "PHEV", "BEV"],
+  };
 
   const MODES = {
     segments: {
@@ -63,7 +89,6 @@ export default function MarketSimulation({ COLORS, useStyles }) {
         "XL Pickup",
       ],
       baselines: {
-        // (atp, fleetPct, leasePct, days, incentives, monthNum, baseVol)
         "S SUV": basePack(38_000, 10_000, 14, 50, 750, 6, 24_000),
         "M SUV": basePack(45_000, 12_000, 16, 55, 1_000, 6, 40_000),
         "L SUV": basePack(54_000, 14_000, 18, 60, 1_500, 6, 28_000),
@@ -86,7 +111,6 @@ export default function MarketSimulation({ COLORS, useStyles }) {
     },
   };
 
-  // Response model coefficients
   const COEFFS = {
     E_PRICE: -1.1,
     B_FLEET_PER10PP: 0.06,
@@ -115,23 +139,122 @@ export default function MarketSimulation({ COLORS, useStyles }) {
     };
   }
 
+  /* -------------------- Shared time axis -------------------- */
+
+  const HIST_START_YM = "2023-01";
+  const FUTURE_CUTOFF_YM = "2025-08";
+
+  const monthTicks = useMemo(() => makeMonthRange("2023-01", "2040-01"), []);
+  const futureCutoffIdx = useMemo(
+    () => monthTicks.indexOf(FUTURE_CUTOFF_YM),
+    [monthTicks]
+  );
+  const DEFAULT_RANGE_START = useMemo(() => {
+    const i = monthTicks.indexOf(HIST_START_YM);
+    return i >= 0 ? i : 0;
+  }, [monthTicks]);
+  const DEFAULT_RANGE_END = useMemo(() => {
+    const i = monthTicks.indexOf(FUTURE_CUTOFF_YM);
+    return i >= 0 ? i : monthTicks.length - 1;
+  }, [monthTicks]);
+
+  /* -------------------- Profiles for BOTH modes -------------------- */
+
+  const profilesByMode = useMemo(() => {
+    const out = {};
+    ["segments", "powertrains"].forEach((m) => {
+      const profileByKey = {};
+      const keys = MODES[m].keys;
+      for (const key of keys) {
+        const base = MODES[m].baselines[key];
+        profileByKey[key] = buildDummyProfileForKey(
+          key,
+          base,
+          monthTicks.length
+        );
+      }
+      out[m] = { monthTicks, profileByKey };
+    });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monthTicks]);
+
+  /* -------------------- PERSISTENT PER-MODE STATE -------------------- */
+
+  const [mode, setMode] = useState("segments");
+  const [stateByMode, setStateByMode] = useState(() => ({
+    segments: {
+      selected: DEFAULT_SELECTED.segments,
+      edits: {},
+      selectedMonthIdx: null,
+      rangeStartIdx: null, // ← start as null so we can set real defaults once monthTicks ready
+      rangeEndIdx: null,
+    },
+    powertrains: {
+      selected: DEFAULT_SELECTED.powertrains,
+      edits: {},
+      selectedMonthIdx: null,
+      rangeStartIdx: null,
+      rangeEndIdx: null,
+    },
+  }));
+
+  // After monthTicks known, assign defaults only where null
+  React.useEffect(() => {
+    setStateByMode((prev) => ({
+      segments: {
+        ...prev.segments,
+        rangeStartIdx: prev.segments.rangeStartIdx ?? DEFAULT_RANGE_START,
+        rangeEndIdx: prev.segments.rangeEndIdx ?? DEFAULT_RANGE_END,
+      },
+      powertrains: {
+        ...prev.powertrains,
+        rangeStartIdx: prev.powertrains.rangeStartIdx ?? DEFAULT_RANGE_START,
+        rangeEndIdx: prev.powertrains.rangeEndIdx ?? DEFAULT_RANGE_END,
+      },
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [DEFAULT_RANGE_START, DEFAULT_RANGE_END]);
+
+  function switchMode(nextMode) {
+    setMode(nextMode); // keep per-mode state intact
+  }
+
+  // Convenience getters/setters scoped to active mode
+  const view = stateByMode[mode];
+  const { selected, edits, selectedMonthIdx, rangeStartIdx, rangeEndIdx } =
+    view;
+
+  const defs = MODES[mode];
+  const activeProfiles = profilesByMode[mode];
+
+  function updateView(patch) {
+    setStateByMode((prev) => ({
+      ...prev,
+      [mode]: { ...prev[mode], ...patch },
+    }));
+  }
+  function updateViewField(field, value) {
+    setStateByMode((prev) => ({
+      ...prev,
+      [mode]: { ...prev[mode], [field]: value },
+    }));
+  }
+
   function getRangeBounds() {
     const rs = Math.max(
       0,
-      Math.min(rangeStartIdx ?? 0, segmentProfiles.monthTicks.length - 1)
+      Math.min(rangeStartIdx ?? DEFAULT_RANGE_START, monthTicks.length - 1)
     );
     const re = Math.max(
       rs,
-      Math.min(
-        rangeEndIdx ?? segmentProfiles.monthTicks.length - 1,
-        segmentProfiles.monthTicks.length - 1
-      )
+      Math.min(rangeEndIdx ?? DEFAULT_RANGE_END, monthTicks.length - 1)
     );
     return [rs, re];
   }
 
   function rangeStatsForKey(key, rs, re) {
-    const prof = segmentProfiles.profileByKey[key];
+    const prof = activeProfiles.profileByKey[key];
     if (!prof) {
       return {
         avgPrice: 0,
@@ -174,100 +297,33 @@ export default function MarketSimulation({ COLORS, useStyles }) {
 
   function clearSelectedMonthToRange() {
     const [rs, re] = getRangeBounds();
-    setEdits((prev) => {
-      const next = { ...prev };
-      for (const key of selected) {
-        const stats = rangeStatsForKey(key, rs, re);
-        next[key] = {
-          ...(next[key] || {}),
-          price: stats.avgPrice,
-          fleet: stats.avgFleet,
-          lease: stats.avgLease,
-          days: stats.avgDays,
-          incentives: stats.avgIncentives,
-          // month intentionally omitted
-        };
-      }
-      return next;
-    });
-    setSelectedMonthIdx(null);
-  }
-
-  /* -------------------- State -------------------- */
-
-  const [mode, setMode] = useState("segments");
-  const [selected, setSelected] = useState(["M SUV"]);
-  const [edits, setEdits] = useState({});
-  const [selectedMonthIdx, setSelectedMonthIdx] = useState(null); // chart selection
-
-  function switchMode(nextMode) {
-    const first = MODES[nextMode].keys[0];
-    setMode(nextMode);
-    setSelected([first]);
-    setEdits({});
-    setSelectedMonthIdx(null);
-  }
-
-  const defs = MODES[mode];
-
-  /* -------------------- Dummy monthly data (chart + per-field) -------------------- */
-
-  // EXTEND end to 2040-01
-  const monthTicks = useMemo(() => makeMonthRange("2023-01", "2040-01"), []);
-
-  // Define the last historical month (inclusive); future begins after this index
-  const HIST_START_YM = "2023-01";
-  const futureCutoffYM = "2025-08";
-  const futureCutoffIdx = useMemo(
-    () => monthTicks.indexOf(futureCutoffYM),
-    [monthTicks]
-  );
-
-  const segmentProfiles = useMemo(() => {
-    const profileByKey = {};
-    for (const key of MODES.segments.keys) {
-      const base = MODES.segments.baselines[key];
-      profileByKey[key] = buildDummyProfileForKey(key, base, monthTicks.length);
+    const newEdits = { ...edits };
+    for (const key of selected) {
+      const stats = rangeStatsForKey(key, rs, re);
+      newEdits[key] = {
+        ...(newEdits[key] || {}),
+        price: stats.avgPrice,
+        fleet: stats.avgFleet,
+        lease: stats.avgLease,
+        days: stats.avgDays,
+        incentives: stats.avgIncentives,
+      };
     }
-    return { monthTicks, profileByKey };
-  }, [monthTicks]);
-
-  // Date range (defaults to current actual history: Jan 2023 → Aug 2025)
-  const [rangeStartIdx, setRangeStartIdx] = useState(() => {
-    const i = segmentProfiles.monthTicks.indexOf(HIST_START_YM);
-    return i >= 0 ? i : 0;
-  });
-  const [rangeEndIdx, setRangeEndIdx] = useState(() => {
-    const i = segmentProfiles.monthTicks.indexOf(futureCutoffYM);
-    return i >= 0 ? i : segmentProfiles.monthTicks.length - 1;
-  });
+    updateView({ edits: newEdits, selectedMonthIdx: null });
+  }
 
   /* -------------------- Derived rows -------------------- */
 
   const rows = useMemo(() => {
-    if (mode !== "segments") {
-      // Powertrains (unchanged)
-      return selected.map((key) => {
-        const b = defs.baselines[key];
-        const s = { ...b, ...(edits[key] || {}) };
-        const vol = computeVolume(s, b, COEFFS);
-        return { key, label: key, ...s, volume: vol };
-      });
-    }
-
     const [rs, re] = getRangeBounds();
 
     return selected.map((key) => {
       const b = defs.baselines[key];
-
       if (selectedMonthIdx != null) {
-        // Month selected: keep snapshot behavior
         const s = { ...b, ...(edits[key] || {}) };
         const vol = computeVolume(s, b, COEFFS);
         return { key, label: key, ...s, volume: vol };
       }
-
-      // No month selected: show range averages/totals
       const stats = rangeStatsForKey(key, rs, re);
       const s = {
         ...b,
@@ -281,163 +337,104 @@ export default function MarketSimulation({ COLORS, useStyles }) {
       return { key, label: key, ...s, volume: stats.totalVolume };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    mode,
-    selected,
-    edits,
-    selectedMonthIdx,
-    rangeStartIdx,
-    rangeEndIdx,
-    segmentProfiles,
-  ]);
+  }, [mode, selected, edits, selectedMonthIdx, rangeStartIdx, rangeEndIdx]);
 
-  /* -------------------- KPIs (range-aware in Segments mode) -------------------- */
+  /* -------------------- KPIs -------------------- */
 
   const kpis = useMemo(() => {
-    if (mode === "segments") {
-      const rs = Math.max(
-        0,
-        Math.min(rangeStartIdx ?? 0, segmentProfiles.monthTicks.length - 1)
-      );
-      const re = Math.max(
-        rs,
-        Math.min(
-          rangeEndIdx ?? segmentProfiles.monthTicks.length - 1,
-          segmentProfiles.monthTicks.length - 1
-        )
-      );
-      const keys = selected.filter((k) => /SUV|Pickup/i.test(k));
+    const [rs, re] = getRangeBounds();
+    const keys = selected;
 
-      let sumVol = 0;
-      let sumPriceVol = 0;
-      let sumFleetVol = 0;
-      let sumLeaseVol = 0;
-      let sumDaysVol = 0;
-      let sumIncVol = 0;
+    let sumVol = 0;
+    let sumPriceVol = 0;
+    let sumFleetVol = 0;
+    let sumLeaseVol = 0;
+    let sumDaysVol = 0;
+    let sumIncVol = 0;
 
-      for (const key of keys) {
-        const prof = segmentProfiles.profileByKey[key];
-        if (!prof) continue;
+    for (const key of keys) {
+      const prof = activeProfiles.profileByKey[key];
+      if (!prof) continue;
 
-        for (let i = rs; i <= re; i++) {
-          const v = prof.volume[i]?.v ?? 0;
-          const p = prof.price[i] ?? 0;
-          const fleet = prof.fleet[i] ?? 0;
-          const lease = prof.lease[i] ?? 0;
-          const days = prof.days[i] ?? 0;
-          const inc = prof.incentives[i] ?? 0;
+      for (let i = rs; i <= re; i++) {
+        const v = prof.volume[i]?.v ?? 0;
+        const p = prof.price[i] ?? 0;
+        const fleet = prof.fleet[i] ?? 0;
+        const lease = prof.lease[i] ?? 0;
+        const days = prof.days[i] ?? 0;
+        const inc = prof.incentives[i] ?? 0;
 
-          sumVol += v;
-          sumPriceVol += p * v;
-          sumFleetVol += fleet * v;
-          sumLeaseVol += lease * v;
-          sumDaysVol += days * v;
-          sumIncVol += inc * v;
-        }
+        sumVol += v;
+        sumPriceVol += p * v;
+        sumFleetVol += fleet * v;
+        sumLeaseVol += lease * v;
+        sumDaysVol += days * v;
+        sumIncVol += inc * v;
       }
-
-      const volWeighted = (sum) => (sumVol > 0 ? sum / sumVol : 0);
-
-      return {
-        totalVolume: sumVol,
-        weightedATP: volWeighted(sumPriceVol),
-        fleetMix: volWeighted(sumFleetVol),
-        leaseMix: volWeighted(sumLeaseVol),
-        daysSupply: volWeighted(sumDaysVol),
-        incentives: volWeighted(sumIncVol),
-      };
     }
 
-    // Powertrains mode (snapshot-style)
-    const totalVolume = rows.reduce((a, r) => a + r.volume, 0);
-    const weightedATP =
-      totalVolume > 0
-        ? rows.reduce((a, r) => a + r.price * r.volume, 0) / totalVolume
-        : 0;
-    const fleetMix =
-      totalVolume > 0
-        ? rows.reduce((a, r) => a + r.fleet * r.volume, 0) / totalVolume
-        : 0;
-    const leaseMix =
-      totalVolume > 0
-        ? rows.reduce((a, r) => a + r.lease * r.volume, 0) / totalVolume
-        : 0;
-    const daysSupply =
-      totalVolume > 0
-        ? rows.reduce((a, r) => a + r.days * r.volume, 0) / totalVolume
-        : 0;
-    const incentives =
-      totalVolume > 0
-        ? rows.reduce((a, r) => a + r.incentives * r.volume, 0) / totalVolume
-        : 0;
+    const volWeighted = (sum) => (sumVol > 0 ? sum / sumVol : 0);
 
     return {
-      totalVolume,
-      weightedATP,
-      fleetMix,
-      leaseMix,
-      daysSupply,
-      incentives,
+      totalVolume: sumVol,
+      weightedATP: volWeighted(sumPriceVol),
+      fleetMix: volWeighted(sumFleetVol),
+      leaseMix: volWeighted(sumLeaseVol),
+      daysSupply: volWeighted(sumDaysVol),
+      incentives: volWeighted(sumIncVol),
     };
-  }, [mode, selected, rows, rangeStartIdx, rangeEndIdx, segmentProfiles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, selected, rangeStartIdx, rangeEndIdx, activeProfiles]);
 
-  /* -------------------- Apply selected month to inputs -------------------- */
+  /* -------------------- Apply month selection -------------------- */
 
   function applyMonthToInputs(idx) {
-    if (mode !== "segments") return;
-    setEdits((prev) => {
-      const next = { ...prev };
-      for (const key of selected) {
-        const prof = segmentProfiles.profileByKey[key];
-        if (!prof) continue;
-        const i = Math.max(
-          0,
-          Math.min(idx, segmentProfiles.monthTicks.length - 1)
-        );
-        const mNum = ymToMonthNumber(segmentProfiles.monthTicks[i]); // 1..12
-        next[key] = {
-          ...(next[key] || {}),
-          price: Math.round(prof.price[i]),
-          fleet: Math.round(prof.fleet[i]),
-          lease: Math.round(prof.lease[i]),
-          days: Math.round(prof.days[i]),
-          incentives: Math.round(prof.incentives[i]),
-          month: mNum,
-        };
-      }
-      return next;
-    });
-    setSelectedMonthIdx(idx);
+    const newEdits = { ...edits };
+    for (const key of selected) {
+      const prof = activeProfiles.profileByKey[key];
+      if (!prof) continue;
+      const i = Math.max(0, Math.min(idx, monthTicks.length - 1));
+      const mNum = ymToMonthNumber(monthTicks[i]);
+      newEdits[key] = {
+        ...(newEdits[key] || {}),
+        price: Math.round(prof.price[i]),
+        fleet: Math.round(prof.fleet[i]),
+        lease: Math.round(prof.lease[i]),
+        days: Math.round(prof.days[i]),
+        incentives: Math.round(prof.incentives[i]),
+        month: mNum,
+      };
+    }
+    updateView({ edits: newEdits, selectedMonthIdx: idx });
   }
 
   /* -------------------- Handlers -------------------- */
 
   function toggleSelection(key) {
-    setSelected((prev) =>
-      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
-    );
+    const nextSel = selected.includes(key)
+      ? selected.filter((k) => k !== key)
+      : [...selected, key];
+    updateViewField("selected", nextSel);
   }
 
   function handleChange(key, field, raw) {
     const value = toNumberSafe(raw);
-    setEdits((prev) => {
-      const next = { ...(prev[key] || {}) };
-      if (field === "month") next.month = clamp(Math.round(value), 1, 12);
-      else if (field === "price") next.price = clamp(value, 1000, 250000);
-      else if (field === "fleet") next.fleet = clamp(value, 0, 100000);
-      else if (field === "lease") next.lease = clamp(value, 0, 100000);
-      else if (field === "days") next.days = clamp(value, 0, 400);
-      else if (field === "incentives") next.incentives = clamp(value, 0, 25000);
-      return { ...prev, [key]: next };
-    });
+    const newEdits = { ...(edits || {}) };
+    const next = { ...(newEdits[key] || {}) };
+    if (field === "month") next.month = clamp(Math.round(value), 1, 12);
+    else if (field === "price") next.price = clamp(value, 1000, 250000);
+    else if (field === "fleet") next.fleet = clamp(value, 0, 100000);
+    else if (field === "lease") next.lease = clamp(value, 0, 100000);
+    else if (field === "days") next.days = clamp(value, 0, 400);
+    else if (field === "incentives") next.incentives = clamp(value, 0, 25000);
+    newEdits[key] = next;
+    updateViewField("edits", newEdits);
   }
 
   function resetCard(key) {
-    setEdits((prev) => {
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
+    const newEdits = { ...(edits || {}) };
+    delete newEdits[key];
+    updateViewField("edits", newEdits);
   }
 
   /* -------------------- Styles -------------------- */
@@ -460,7 +457,7 @@ export default function MarketSimulation({ COLORS, useStyles }) {
     gap: 10,
   };
 
-  const label = { color: COLORS.muted, fontSize: 12 };
+  const label = { color: "#FFFFF", fontSize: 12 };
   const inputRow = {
     display: "grid",
     gridTemplateColumns: "1fr 110px",
@@ -489,14 +486,13 @@ export default function MarketSimulation({ COLORS, useStyles }) {
     border: "none",
     borderRadius: 12,
     padding: 12,
-    textAlign: "center", // center text
-    display: "flex", // allow vertical alignment
+    textAlign: "center",
+    display: "flex",
     flexDirection: "column",
-    alignItems: "center", // center horizontally
-    justifyContent: "center", // center vertically
+    alignItems: "center",
+    justifyContent: "center",
   };
 
-  // Color helper
   const hexToRgb = (hex) => {
     const h = hex.replace("#", "");
     const full =
@@ -512,7 +508,6 @@ export default function MarketSimulation({ COLORS, useStyles }) {
     return `${r}, ${g}, ${b}`;
   };
 
-  // Powertrains chip (simple)
   const chip = (active) => {
     const accent = suvAccent;
     return {
@@ -527,34 +522,33 @@ export default function MarketSimulation({ COLORS, useStyles }) {
     };
   };
 
-  // Segment chips (fixed width, compact)
   const chipFixed = (active, label) => {
-    const isPickup = /Pickup/i.test(label);
-    const accent = isPickup ? PICKUP_BLUE : suvAccent;
+    const base =
+      getKeyColor(label) || (/Pickup/i.test(label) ? PICKUP_BLUE : suvAccent);
+    const alpha = isDarkHex(COLORS.panel) ? 0.22 : 0.14;
+
     return {
-      padding: "4px 8px",
-      borderRadius: 999,
-      border: `1px solid ${active ? accent : COLORS.border}`,
-      background: active ? `rgba(${hexToRgb(accent)}, 0.18)` : "transparent",
+      padding: "6px 10px",
+      borderRadius: 10,
+      border: `1px solid ${active ? base : COLORS.border}`,
+      background: active ? `rgba(${hexToRgb(base)}, ${alpha})` : "transparent",
       color: COLORS.text,
       cursor: "pointer",
-      fontSize: 12,
+      fontSize: 13,
       transition: "border-color 120ms ease, background-color 120ms ease",
       minWidth: 90,
       textAlign: "center",
     };
   };
 
-  // ---- Segments chip layout (SUV row above Pickup row) ----
-  const sizesOrder = ["S", "M", "L", "XL"]; // XS removed
+  const sizesOrder = ["S", "M", "L", "XL"];
 
   function renderSegmentChips() {
     const suvLabels = sizesOrder.map((s) => `${s} SUV`);
     const pickupLabels = sizesOrder.map((s) => `${s} Pickup`);
 
     return (
-      <div style={{ display: "grid", gap: 8 }}>
-        {/* SUVs row */}
+      <div style={{ display: "grid", gap: 8, marginBottom: 20 }}>
         <div
           style={{
             display: "grid",
@@ -577,7 +571,6 @@ export default function MarketSimulation({ COLORS, useStyles }) {
           })}
         </div>
 
-        {/* Pickups row */}
         <div
           style={{
             display: "grid",
@@ -606,12 +599,10 @@ export default function MarketSimulation({ COLORS, useStyles }) {
   /* -------------------- Render -------------------- */
 
   const selectedMonthLabel =
-    selectedMonthIdx == null
-      ? null
-      : ymToLabel(segmentProfiles.monthTicks[selectedMonthIdx]);
+    selectedMonthIdx == null ? null : ymToLabel(monthTicks[selectedMonthIdx]);
 
-  // determine whether to show dashed future (range extends past the cutoff)
-  const showFutureAsDashed = rangeEndIdx > futureCutoffIdx;
+  const showFutureAsDashed =
+    (rangeEndIdx ?? DEFAULT_RANGE_END) > futureCutoffIdx;
 
   return (
     <div>
@@ -620,14 +611,27 @@ export default function MarketSimulation({ COLORS, useStyles }) {
         <h1 style={{ ...styles.h1, margin: 0, color: "#FF5432" }}>
           Market Simulation
         </h1>
-        <p style={{ color: COLORS.muted, margin: 0 }}>
+        <p
+          style={{
+            color: COLORS.muted,
+            margin: 0,
+            fontSize: 20,
+            lineHeight: 1.4,
+          }}
+        >
           Toggle <strong>Segments</strong> or <strong>Powertrains</strong>. Pick
-          any items to model. Edit inputs on each card — <em>Volume</em> updates
-          instantly. Click the chart to set a month and auto-fill inputs.
+          any categories to simulate. Edit inputs on each card — <em>Volume</em>{" "}
+          updates instantly. Click the chart to set a month and auto-fill
+          inputs.
         </p>
 
-        {/* Mode toggle */}
-        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        <div style={{ marginTop: 30, marginBottom: 6 }}>
+          <div style={{ color: COLORS.muted }}>Choose category</div>
+        </div>
+
+        <div
+          style={{ display: "flex", gap: 8, marginTop: 0, marginBottom: 20 }}
+        >
           {[
             { id: "segments", label: "Segments" },
             { id: "powertrains", label: "Powertrains" },
@@ -638,15 +642,23 @@ export default function MarketSimulation({ COLORS, useStyles }) {
               style={{
                 padding: "8px 12px",
                 borderRadius: 10,
-                border: `1px solid ${
-                  mode === m.id ? suvAccent : COLORS.border
-                }`,
+                border:
+                  mode === m.id
+                    ? isDarkHex(COLORS.panel)
+                      ? "1px solid #FFFFFF"
+                      : "1px solid #FF5432"
+                    : `1px solid ${COLORS.border}`,
                 background:
                   mode === m.id
-                    ? `rgba(${hexToRgb(suvAccent)}, 0.18)`
+                    ? isDarkHex(COLORS.panel)
+                      ? "rgba(255,255,255,0.22)"
+                      : "rgba(255,84,50,0.18)"
                     : "transparent",
+                fontSize: 16,
                 color: COLORS.text,
                 cursor: "pointer",
+                transition:
+                  "background-color 120ms ease, border-color 120ms ease",
               }}
             >
               {m.label}
@@ -663,14 +675,38 @@ export default function MarketSimulation({ COLORS, useStyles }) {
           {mode === "segments" ? (
             renderSegmentChips()
           ) : (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 8,
+                marginBottom: 20,
+              }}
+            >
               {defs.keys.map((k) => {
                 const active = selected.includes(k);
+                const c = getKeyColor(k) || suvAccent;
+                const alpha = isDarkHex(COLORS.panel) ? 0.22 : 0.14;
+                const style = {
+                  padding: "6px 10px",
+                  borderRadius: 10,
+                  border: `1px solid ${active ? c : COLORS.border}`,
+                  background: active
+                    ? `rgba(${hexToRgb(c)}, ${alpha})`
+                    : "transparent",
+                  color: COLORS.text,
+                  cursor: "pointer",
+                  fontSize: 13,
+                  transition:
+                    "border-color 120ms ease, background-color 120ms ease",
+                  minWidth: 90,
+                  textAlign: "center",
+                };
                 return (
                   <button
                     key={k}
                     onClick={() => toggleSelection(k)}
-                    style={chip(active)}
+                    style={style}
                   >
                     {k}
                   </button>
@@ -681,103 +717,115 @@ export default function MarketSimulation({ COLORS, useStyles }) {
         </div>
       </div>
 
-      {/* Controls above KPIs (Segments only) */}
-      {mode === "segments" && (
-        <div
+      {/* Controls above KPIs */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginTop: 8,
+          flexWrap: "wrap",
+          marginLeft: 6,
+        }}
+      >
+        <span style={{ color: COLORS.muted, fontSize: 12 }}>Date range:</span>
+
+        <select
+          value={rangeStartIdx ?? DEFAULT_RANGE_START}
+          onChange={(e) => {
+            const s = Number(e.target.value);
+            const eIdx = Math.max(s, rangeEndIdx ?? DEFAULT_RANGE_END);
+            updateView({ rangeStartIdx: s, rangeEndIdx: eIdx });
+            if (
+              selectedMonthIdx != null &&
+              (selectedMonthIdx < s || selectedMonthIdx > eIdx)
+            ) {
+              updateViewField("selectedMonthIdx", null);
+            }
+          }}
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            marginTop: 8,
-            flexWrap: "wrap",
+            padding: "6px 8px",
+            borderRadius: 8,
+            border: `1px solid ${COLORS.border}`,
+            background: COLORS.panel,
+            color: COLORS.text,
+            fontSize: 12,
+            appearance: "none",
+            WebkitAppearance: "none",
+            MozAppearance: "none",
           }}
         >
-          <span style={{ color: COLORS.muted, fontSize: 12 }}>Date range:</span>
+          {monthTicks.map((m, i) => (
+            <option key={`s-${m}`} value={i} style={optionStyle}>
+              {m}
+            </option>
+          ))}
+        </select>
 
-          <select
-            value={rangeStartIdx}
-            onChange={(e) => {
-              const s = Number(e.target.value);
-              const eIdx = Math.max(s, rangeEndIdx);
-              setRangeStartIdx(s);
-              setRangeEndIdx(eIdx);
-              if (
-                selectedMonthIdx != null &&
-                (selectedMonthIdx < s || selectedMonthIdx > eIdx)
-              ) {
-                setSelectedMonthIdx(null);
-              }
-            }}
-            style={{
-              padding: "6px 8px",
-              borderRadius: 8,
-              border: `1px solid ${COLORS.border}`,
-              background: COLORS.panel,
-              color: COLORS.text,
-              fontSize: 12,
-              appearance: "none",
-              WebkitAppearance: "none",
-              MozAppearance: "none",
-            }}
-          >
-            {segmentProfiles.monthTicks.map((m, i) => (
-              <option key={`s-${m}`} value={i} style={optionStyle}>
-                {m}
-              </option>
-            ))}
-          </select>
+        <span style={{ color: COLORS.muted, fontSize: 12 }}>to</span>
 
-          <span style={{ color: COLORS.muted, fontSize: 12 }}>to</span>
+        <select
+          value={rangeEndIdx ?? DEFAULT_RANGE_END}
+          onChange={(e) => {
+            const eIdx = Number(e.target.value);
+            const s = Math.min(rangeStartIdx ?? DEFAULT_RANGE_START, eIdx);
+            updateView({ rangeStartIdx: s, rangeEndIdx: eIdx });
+            if (
+              selectedMonthIdx != null &&
+              (selectedMonthIdx < s || selectedMonthIdx > eIdx)
+            ) {
+              updateViewField("selectedMonthIdx", null);
+            }
+          }}
+          style={{
+            padding: "6px 8px",
+            borderRadius: 8,
+            border: `1px solid ${COLORS.border}`,
+            background: COLORS.panel,
+            color: COLORS.text,
+            fontSize: 12,
+            appearance: "none",
+            WebkitAppearance: "none",
+            MozAppearance: "none",
+          }}
+        >
+          {monthTicks.map((m, i) => (
+            <option key={`e-${m}`} value={i} style={optionStyle}>
+              {m}
+            </option>
+          ))}
+        </select>
 
-          <select
-            value={rangeEndIdx}
-            onChange={(e) => {
-              const eIdx = Number(e.target.value);
-              const s = Math.min(rangeStartIdx, eIdx);
-              setRangeStartIdx(s);
-              setRangeEndIdx(eIdx);
-              if (
-                selectedMonthIdx != null &&
-                (selectedMonthIdx < s || selectedMonthIdx > eIdx)
-              ) {
-                setSelectedMonthIdx(null);
-              }
-            }}
-            style={{
-              padding: "6px 8px",
-              borderRadius: 8,
-              border: `1px solid ${COLORS.border}`,
-              background: COLORS.panel,
-              color: COLORS.text,
-              fontSize: 12,
-              appearance: "none",
-              WebkitAppearance: "none",
-              MozAppearance: "none",
-            }}
-          >
-            {segmentProfiles.monthTicks.map((m, i) => (
-              <option key={`e-${m}`} value={i} style={optionStyle}>
-                {m}
-              </option>
-            ))}
-          </select>
+        <button
+          onClick={() => {
+            const s = Math.max(0, monthTicks.indexOf(HIST_START_YM));
+            const e = Math.max(s, monthTicks.indexOf(FUTURE_CUTOFF_YM));
+            updateView({ rangeStartIdx: s, rangeEndIdx: e });
+            if (
+              selectedMonthIdx != null &&
+              (selectedMonthIdx < s || selectedMonthIdx > e)
+            ) {
+              updateViewField("selectedMonthIdx", null);
+            }
+          }}
+          style={{
+            padding: "6px 10px",
+            borderRadius: 8,
+            border: `1px solid ${COLORS.border}`,
+            background: "transparent",
+            color: COLORS.muted,
+            cursor: "pointer",
+            fontSize: 12,
+            marginLeft: 8,
+          }}
+        >
+          Reset range
+        </button>
 
+        {selectedMonthIdx != null && (
           <button
-            onClick={() => {
-              const startIdx =
-                segmentProfiles.monthTicks.indexOf(HIST_START_YM);
-              const endIdx = segmentProfiles.monthTicks.indexOf(futureCutoffYM);
-              const s = Math.max(0, startIdx);
-              const e = Math.max(s, endIdx);
-              setRangeStartIdx(s);
-              setRangeEndIdx(e);
-              if (
-                selectedMonthIdx != null &&
-                (selectedMonthIdx < s || selectedMonthIdx > e)
-              ) {
-                setSelectedMonthIdx(null);
-              }
-            }}
+            onClick={clearSelectedMonthToRange}
+            title="Clear selected month"
             style={{
               padding: "6px 10px",
               borderRadius: 8,
@@ -786,31 +834,12 @@ export default function MarketSimulation({ COLORS, useStyles }) {
               color: COLORS.muted,
               cursor: "pointer",
               fontSize: 12,
-              marginLeft: 8,
             }}
           >
-            Reset range
+            Clear selection
           </button>
-
-          {selectedMonthIdx != null && (
-            <button
-              onClick={clearSelectedMonthToRange}
-              title="Clear selected month"
-              style={{
-                padding: "6px 10px",
-                borderRadius: 8,
-                border: `1px solid ${COLORS.border}`,
-                background: "transparent",
-                color: COLORS.muted,
-                cursor: "pointer",
-                fontSize: 12,
-              }}
-            >
-              Clear selection
-            </button>
-          )}
-        </div>
-      )}
+        )}
+      </div>
 
       {/* KPIs + Chart */}
       <div style={{ ...card, marginTop: 8 }}>
@@ -864,30 +893,27 @@ export default function MarketSimulation({ COLORS, useStyles }) {
           </div>
         </div>
 
-        {/* Segments Line Chart (selected segments only) */}
-        {mode === "segments" && (
-          <div style={{ marginTop: 14 }}>
-            <SegmentsLineChart
-              COLORS={COLORS}
-              monthTicks={segmentProfiles.monthTicks}
-              seriesByKey={Object.fromEntries(
-                Object.entries(segmentProfiles.profileByKey).map(([k, v]) => [
-                  k,
-                  v.volume,
-                ])
-              )}
-              selectedKeys={selected.filter((k) => /SUV|Pickup/.test(k))}
-              suvAccent={suvAccent}
-              pickupBlue={PICKUP_BLUE}
-              selectedIndex={selectedMonthIdx}
-              onSelectIndex={applyMonthToInputs}
-              rangeStart={rangeStartIdx}
-              rangeEnd={rangeEndIdx}
-              futureCutoffIdx={futureCutoffIdx}
-              showFutureAsDashed={showFutureAsDashed}
-            />
-          </div>
-        )}
+        <div style={{ marginTop: 14 }}>
+          <LineChartGeneric
+            COLORS={COLORS}
+            monthTicks={monthTicks}
+            seriesByKey={activeSeriesForChart(activeProfiles)}
+            selectedKeys={selected}
+            selectedIndex={selectedMonthIdx}
+            onSelectIndex={applyMonthToInputs}
+            rangeStart={rangeStartIdx ?? DEFAULT_RANGE_START}
+            rangeEnd={rangeEndIdx ?? DEFAULT_RANGE_END}
+            futureCutoffIdx={futureCutoffIdx}
+            showFutureAsDashed={showFutureAsDashed}
+            colorForKey={(label) => colorForKey(label, suvAccent, PICKUP_BLUE)}
+            title={
+              mode === "segments"
+                ? "Volume Over Time (Selected Segments)"
+                : "Volume Over Time (Selected Powertrains)"
+            }
+            isDarkPanel={isDarkHex(COLORS.panel)}
+          />
+        </div>
       </div>
 
       {/* Cards per selection */}
@@ -895,14 +921,13 @@ export default function MarketSimulation({ COLORS, useStyles }) {
         <div
           style={{
             color: COLORS.muted,
-            marginBottom: 8,
+            marginBottom: 12,
             display: "flex",
-            justifyContent: "space-between",
+            justifyContent: "flex-end",
             gap: 8,
             alignItems: "center",
           }}
         >
-          <span>Adjust inputs to simulate volume</span>
           {selectedMonthLabel && (
             <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ color: COLORS.muted }}>
@@ -924,14 +949,20 @@ export default function MarketSimulation({ COLORS, useStyles }) {
           }}
         >
           {rows.map((r) => {
-            const base = defs.baselines[r.key];
+            // ✅ Add these two lines
+            const c =
+              getKeyColor(r.label) ||
+              colorForKey(r.label, suvAccent, PICKUP_BLUE);
+            const alpha = isDarkHex(COLORS.panel) ? 0.1 : 0.14;
+
             return (
               <div
                 key={r.key}
                 style={{
-                  border: `1px solid ${COLORS.border}`,
+                  border: `1px solid ${c}`,
                   borderRadius: 12,
                   padding: 12,
+                  background: `rgba(${hexToRgb(c)}, ${alpha})`,
                 }}
               >
                 <div
@@ -945,7 +976,6 @@ export default function MarketSimulation({ COLORS, useStyles }) {
                   <div style={{ fontWeight: 700 }}>{r.label}</div>
                 </div>
 
-                {/* Volume (highlight) */}
                 <div
                   style={{
                     border: "none",
@@ -962,7 +992,6 @@ export default function MarketSimulation({ COLORS, useStyles }) {
                   </div>
                 </div>
 
-                {/* Inputs (populated by chart selection) */}
                 <div style={inputRow}>
                   <div>
                     <div style={label}>Weighted Avg Transaction Price</div>
@@ -1057,22 +1086,23 @@ export default function MarketSimulation({ COLORS, useStyles }) {
   );
 }
 
-/* -------------------- Segments Line Chart (hover tooltips + click select + range + future-dashed) -------------------- */
+/* -------------------- Generic Line Chart -------------------- */
 
-function SegmentsLineChart(props) {
+function LineChartGeneric(props) {
   const {
     COLORS,
     monthTicks,
-    seriesByKey, // { key: [{i, v}, ...] }
+    seriesByKey,
     selectedKeys,
-    suvAccent,
-    pickupBlue,
-    selectedIndex, // persistent selection index
-    onSelectIndex, // callback(idx)
-    rangeStart, // start index (inclusive)
-    rangeEnd, // end index (inclusive)
-    futureCutoffIdx, // index of last historical month (e.g., 2025-08)
-    showFutureAsDashed, // boolean flag to render future (cutoff+1..re) dashed
+    selectedIndex,
+    onSelectIndex,
+    rangeStart,
+    rangeEnd,
+    futureCutoffIdx,
+    showFutureAsDashed,
+    colorForKey,
+    title = "Volume Over Time",
+    isDarkPanel,
   } = props;
 
   const svgRef = React.useRef(null);
@@ -1087,7 +1117,6 @@ function SegmentsLineChart(props) {
     padT = 18,
     padB = 36;
 
-  // Range-aware indices
   const rs = Math.max(0, Math.min(rangeStart ?? 0, monthTicks.length - 1));
   const re = Math.max(
     rs,
@@ -1109,7 +1138,6 @@ function SegmentsLineChart(props) {
   const mapX = (i) => padL + ((i - rs) / Math.max(1, xMax)) * (w - padL - padR);
   const mapY = (v) => h - padB - (v / globalMax) * (h - padT - padB);
 
-  // ~5 ticks across the range
   const tickCount = 5;
   const tickIdxs = Array.from({ length: tickCount }, (_, i) =>
     Math.round(rs + (i / (tickCount - 1)) * xMax)
@@ -1117,10 +1145,9 @@ function SegmentsLineChart(props) {
 
   const legendItems = lines.map((ln) => ({
     key: ln.key,
-    color: colorForSegment(ln.key, suvAccent, pickupBlue),
+    color: colorForKey(ln.key),
   }));
 
-  // Convert client CSS pixels to SVG coords
   function clientToSvg(evt) {
     if (!svgRef.current) return null;
     const pt = svgRef.current.createSVGPoint();
@@ -1134,11 +1161,9 @@ function SegmentsLineChart(props) {
   function handleMove(e) {
     const p = clientToSvg(e);
     if (!p) return;
-
     const xSvg = Math.max(padL, Math.min(w - padR, p.x));
     const t = (xSvg - padL) / (w - padL - padR);
     const i = Math.round(rs + t * xMax);
-
     const rect = svgRef.current.getBoundingClientRect();
     const leftCss = (xSvg / w) * rect.width;
 
@@ -1163,14 +1188,13 @@ function SegmentsLineChart(props) {
       : lines
           .map((ln) => ({
             key: ln.key,
-            color: colorForSegment(ln.key, suvAccent, pickupBlue),
+            color: colorForKey(ln.key),
             v: ln.values[hoverI]?.v ?? 0,
           }))
           .sort((a, b) => b.v - a.v);
 
   const hoverMonthLabel = hoverI == null ? "" : ymToLabel(monthTicks[hoverI]);
 
-  // helpers to make SVG path strings
   const toPath = (points) =>
     !points.length
       ? ""
@@ -1184,9 +1208,7 @@ function SegmentsLineChart(props) {
         position: "relative",
       }}
     >
-      <div style={{ color: COLORS.muted, marginBottom: 8 }}>
-        Volume Over Time (Selected Segments)
-      </div>
+      <div style={{ color: COLORS.muted, marginBottom: 8 }}>{title}</div>
 
       {/* Legend */}
       {legendItems.length > 0 && (
@@ -1242,12 +1264,7 @@ function SegmentsLineChart(props) {
                 mapX(re) - mapX(Math.max(rs, futureCutoffIdx + 1))
               )}
               height={h - padT - padB}
-              fill={
-                COLORS.panel === "#fff"
-                  ? "rgba(0,0,0,0.04)"
-                  : "rgba(255,255,255,0.05)"
-              }
-              /* Light gray in light mode, light haze in dark mode */
+              fill={isDarkPanel ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)"}
             />
           )}
 
@@ -1267,7 +1284,7 @@ function SegmentsLineChart(props) {
             stroke={COLORS.border}
           />
 
-          {/* X ticks & labels (range-aware) */}
+          {/* X ticks & labels */}
           {tickIdxs.map((ti, idx) => (
             <g key={`t-${idx}`}>
               <line
@@ -1289,11 +1306,10 @@ function SegmentsLineChart(props) {
             </g>
           ))}
 
-          {/* Lines (split into past solid + future dashed if applicable) */}
+          {/* Lines (past solid + future dashed) */}
           {lines.map((ln) => {
-            const stroke = colorForSegment(ln.key, suvAccent, pickupBlue);
+            const stroke = colorForKey(ln.key);
 
-            // Past segment: rs .. min(re, futureCutoffIdx)
             const pastEnd = Math.min(re, futureCutoffIdx);
             const pastPts = [];
             for (let i = rs; i <= pastEnd; i++) {
@@ -1301,7 +1317,6 @@ function SegmentsLineChart(props) {
               pastPts.push([mapX(i), mapY(v)]);
             }
 
-            // Future segment: max(rs, futureCutoffIdx+1) .. re
             const futStart = Math.max(rs, futureCutoffIdx + 1);
             const futPts = [];
             for (let i = futStart; i <= re; i++) {
@@ -1309,7 +1324,6 @@ function SegmentsLineChart(props) {
               futPts.push([mapX(i), mapY(v)]);
             }
 
-            // --- BRIDGE: prepend the Aug-2025 point to the dotted path so we draw the Aug→Sep segment dotted ---
             let futPtsWithBridge = futPts;
             if (showFutureAsDashed && futPts.length > 0 && pastPts.length > 0) {
               const vPastEnd = ln.values[pastEnd]?.v ?? 0;
@@ -1319,7 +1333,6 @@ function SegmentsLineChart(props) {
 
             return (
               <g key={ln.key}>
-                {/* Solid past path */}
                 {pastPts.length > 1 && (
                   <path
                     d={toPath(pastPts)}
@@ -1330,7 +1343,6 @@ function SegmentsLineChart(props) {
                   />
                 )}
 
-                {/* Dotted future path (with bridge) */}
                 {showFutureAsDashed && futPtsWithBridge.length > 1 && (
                   <path
                     d={toPath(futPtsWithBridge)}
@@ -1342,7 +1354,6 @@ function SegmentsLineChart(props) {
                   />
                 )}
 
-                {/* If future not dashed, draw normally */}
                 {!showFutureAsDashed && futPts.length > 1 && (
                   <path
                     d={toPath(futPts)}
@@ -1356,7 +1367,7 @@ function SegmentsLineChart(props) {
             );
           })}
 
-          {/* Persistent selected vertical line (if within range) */}
+          {/* Persistent selected line */}
           {selectedIndex != null &&
             selectedIndex >= rs &&
             selectedIndex <= re && (
@@ -1390,7 +1401,7 @@ function SegmentsLineChart(props) {
                     cx={hoverXsvg}
                     cy={mapY(v)}
                     r="3.5"
-                    fill={colorForSegment(ln.key, suvAccent, pickupBlue)}
+                    fill={colorForKey(ln.key)}
                   />
                 );
               })}
@@ -1460,12 +1471,33 @@ function SegmentsLineChart(props) {
   );
 }
 
-/* -------------------- Dummy profile builder (per-field monthly values) -------------------- */
+/* -------------------- Series builder -------------------- */
+
+function activeSeriesForChart(activeProfiles) {
+  const out = {};
+  for (const [k, prof] of Object.entries(activeProfiles.profileByKey)) {
+    out[k] = prof.volume.map((d, i) => ({ i, v: d.v }));
+  }
+  return out;
+}
+
+/* -------------------- Color helpers -------------------- */
+
+function colorForKey(label, suvAccent, pickupBlue) {
+  const explicit = getKeyColor(label);
+  if (explicit) return explicit;
+  const isPickup = /Pickup/i.test(label);
+  const base = isPickup ? pickupBlue : suvAccent;
+  const t = (hashString(label) % 40) - 20;
+  return shiftHexLightness(base, t / 200);
+}
+
+/* -------------------- Dummy profile builder -------------------- */
 
 function buildDummyProfileForKey(key, base, n) {
   const rnd = mulberry32(hashString(key));
   const season = (i, amp = 0.1) => 1 + amp * Math.sin((2 * Math.PI * i) / 12);
-  const noise = (amp = 0.03) => 1 + (rnd() - 0.5) * (2 * amp); // ±amp
+  const noise = (amp = 0.03) => 1 + (rnd() - 0.5) * (2 * amp);
   const trend = (i, slope = 0.0015) => 1 + slope * i;
 
   const price = Array.from(
@@ -1482,7 +1514,7 @@ function buildDummyProfileForKey(key, base, n) {
   );
   const days = Array.from(
     { length: n },
-    (_, i) => base.days * (2 - season(i, 0.08)) * noise(0.03) // loosely counter-seasonal
+    (_, i) => base.days * (2 - season(i, 0.08)) * noise(0.03)
   );
   const incentives = Array.from(
     { length: n },
@@ -1508,9 +1540,8 @@ function ymToLabel(ym) {
   });
 }
 function ymToMonthNumber(ym) {
-  return parseInt(ym.split("-")[1], 10); // 1..12
+  return parseInt(ym.split("-")[1], 10);
 }
-
 function makeMonthRange(startYM, endYM) {
   const [sY, sM] = startYM.split("-").map((n) => parseInt(n, 10));
   const [eY, eM] = endYM.split("-").map((n) => parseInt(n, 10));
@@ -1527,14 +1558,6 @@ function makeMonthRange(startYM, endYM) {
   }
   return out;
 }
-
-function colorForSegment(label, suvAccent, pickupBlue) {
-  const isPickup = /Pickup/i.test(label);
-  const base = isPickup ? pickupBlue : suvAccent;
-  const t = (hashString(label) % 40) - 20; // -20..+19
-  return shiftHexLightness(base, t / 200); // subtle ±10% L
-}
-
 function mulberry32(a) {
   return function () {
     let t = (a += 0x6d2b79f5);
@@ -1660,9 +1683,7 @@ function fmt(v, digits = 0) {
         maximumFractionDigits: digits,
       });
 }
-// clamp a pixel value within container bounds, supports 'calc(100% - Xpx)'
 function clampPx(px, minPx, max) {
   if (typeof max === "number") return `${Math.max(minPx, Math.min(px, max))}px`;
-  const n = parseInt(String(max).match(/- (\d+)px/)?.[1] || "240", 10);
-  return `min(max(${px}px, ${minPx}px), calc(100% - ${n}px))`;
+  return `min(max(${px}px, ${minPx}px), ${max})`;
 }
