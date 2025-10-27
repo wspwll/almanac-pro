@@ -1,8 +1,27 @@
 // src/pages/MarketSimulation.jsx
 import React, { useMemo, useState } from "react";
 
+/**
+ * Market Simulation (Segments / Powertrains)
+ * - Segment pills: SUVs (S/M/L/XL) over Pickups (S/M/L/XL), compact chips
+ * - KPIs + Segments line chart:
+ *    • Legend (top), taller chart, precise hover mapping
+ *    • Tooltip shows Month/Year + per-segment volumes
+ *    • Vertical hover guide + persistent selected guide on click
+ *    • Date range selectors (Start/End) + Reset range
+ *    • Clear selected month button
+ * - Clicking a month applies that month’s (dummy) values to the cards below
+ * - KPIs recompute based on the visible date range in Segments mode
+ * - FUTURE: range extends to 2040-01; portions after 2025-08 render dashed if range crosses into future
+ */
+
 export default function MarketSimulation({ COLORS, useStyles }) {
   const styles = useStyles(COLORS);
+  // Style for <option> elements inside dark mode dropdowns
+  const optionStyle = {
+    background: COLORS.panel,
+    color: COLORS.text,
+  };
 
   const isDarkHex = (hex) => {
     const h = hex?.replace("#", "");
@@ -20,144 +39,408 @@ export default function MarketSimulation({ COLORS, useStyles }) {
     const brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
     return brightness < 0.5;
   };
+
   const sigSrc = isDarkHex(COLORS.panel)
     ? "/signature-fog.png"
     : "/signature-moonstone.png";
 
-  // ---- Initial scenario
-  const [state, setState] = useState({
-    price: 50,
-    base_price: 50,
-    base_demand: 10000,
-    elasticity: -1.2, // typically negative
-    vcpu: 20, // variable cost per unit
-    fixed_cost: 120000, // fixed cost
+  /* -------------------- Definitions -------------------- */
+
+  const PICKUP_BLUE = "#60B6FF"; // light blue for pickups (pairs with #FF5432)
+  const suvAccent = COLORS.accent;
+
+  const MODES = {
+    segments: {
+      label: "Segments",
+      keys: [
+        "S SUV",
+        "M SUV",
+        "L SUV",
+        "XL SUV",
+        "S Pickup",
+        "M Pickup",
+        "L Pickup",
+        "XL Pickup",
+      ],
+      baselines: {
+        // (atp, fleetPct, leasePct, days, incentives, monthNum, baseVol)
+        "S SUV": basePack(38_000, 10_000, 14, 50, 750, 6, 24_000),
+        "M SUV": basePack(45_000, 12_000, 16, 55, 1_000, 6, 40_000),
+        "L SUV": basePack(54_000, 14_000, 18, 60, 1_500, 6, 28_000),
+        "XL SUV": basePack(62_000, 16_000, 20, 65, 2_000, 6, 16_000),
+        "S Pickup": basePack(42_000, 11_000, 13, 55, 700, 6, 20_000),
+        "M Pickup": basePack(50_000, 13_000, 15, 60, 1_100, 6, 36_000),
+        "L Pickup": basePack(58_000, 15_000, 17, 65, 1_600, 6, 26_000),
+        "XL Pickup": basePack(66_000, 17_000, 19, 70, 2_200, 6, 14_000),
+      },
+    },
+    powertrains: {
+      label: "Powertrains",
+      keys: ["ICE", "HEV", "PHEV", "BEV"],
+      baselines: {
+        ICE: basePack(40_000, 9_000, 15, 55, 750, 6, 70_000),
+        HEV: basePack(44_000, 12_000, 17, 50, 1_000, 6, 28_000),
+        PHEV: basePack(50_000, 15_000, 18, 60, 1_500, 6, 14_000),
+        BEV: basePack(48_000, 10_000, 20, 65, 2_500, 6, 18_000),
+      },
+    },
+  };
+
+  // Response model coefficients
+  const COEFFS = {
+    E_PRICE: -1.1,
+    B_FLEET_PER10PP: 0.06,
+    B_LEASE_PER10PP: 0.04,
+    B_INCENTIVES_PER_K: 0.05,
+    B_DAYS_PER10: -0.05,
+  };
+
+  function basePack(
+    atp,
+    fleetPct,
+    leasePct,
+    days,
+    incentives,
+    monthNum,
+    baseVol
+  ) {
+    return {
+      price: atp,
+      fleet: fleetPct,
+      lease: leasePct,
+      days,
+      incentives,
+      month: monthNum,
+      base_volume: baseVol,
+    };
+  }
+
+  function getRangeBounds() {
+    const rs = Math.max(
+      0,
+      Math.min(rangeStartIdx ?? 0, segmentProfiles.monthTicks.length - 1)
+    );
+    const re = Math.max(
+      rs,
+      Math.min(
+        rangeEndIdx ?? segmentProfiles.monthTicks.length - 1,
+        segmentProfiles.monthTicks.length - 1
+      )
+    );
+    return [rs, re];
+  }
+
+  function rangeStatsForKey(key, rs, re) {
+    const prof = segmentProfiles.profileByKey[key];
+    if (!prof) {
+      return {
+        avgPrice: 0,
+        avgFleet: 0,
+        avgLease: 0,
+        avgDays: 0,
+        avgIncentives: 0,
+        totalVolume: 0,
+      };
+    }
+
+    let sumVol = 0,
+      sumPriceVol = 0,
+      sumFleetVol = 0,
+      sumLeaseVol = 0,
+      sumDaysVol = 0,
+      sumIncVol = 0;
+
+    for (let i = rs; i <= re; i++) {
+      const v = prof.volume[i]?.v ?? 0;
+      sumVol += v;
+      sumPriceVol += (prof.price[i] ?? 0) * v;
+      sumFleetVol += (prof.fleet[i] ?? 0) * v;
+      sumLeaseVol += (prof.lease[i] ?? 0) * v;
+      sumDaysVol += (prof.days[i] ?? 0) * v;
+      sumIncVol += (prof.incentives[i] ?? 0) * v;
+    }
+
+    const vw = (s) => (sumVol > 0 ? s / sumVol : 0);
+
+    return {
+      avgPrice: Math.round(vw(sumPriceVol)),
+      avgFleet: Math.round(vw(sumFleetVol)),
+      avgLease: Math.round(vw(sumLeaseVol)),
+      avgDays: Math.round(vw(sumDaysVol)),
+      avgIncentives: Math.round(vw(sumIncVol)),
+      totalVolume: Math.round(sumVol),
+    };
+  }
+
+  function clearSelectedMonthToRange() {
+    const [rs, re] = getRangeBounds();
+    setEdits((prev) => {
+      const next = { ...prev };
+      for (const key of selected) {
+        const stats = rangeStatsForKey(key, rs, re);
+        next[key] = {
+          ...(next[key] || {}),
+          price: stats.avgPrice,
+          fleet: stats.avgFleet,
+          lease: stats.avgLease,
+          days: stats.avgDays,
+          incentives: stats.avgIncentives,
+          // month intentionally omitted
+        };
+      }
+      return next;
+    });
+    setSelectedMonthIdx(null);
+  }
+
+  /* -------------------- State -------------------- */
+
+  const [mode, setMode] = useState("segments");
+  const [selected, setSelected] = useState(["M SUV"]);
+  const [edits, setEdits] = useState({});
+  const [selectedMonthIdx, setSelectedMonthIdx] = useState(null); // chart selection
+
+  function switchMode(nextMode) {
+    const first = MODES[nextMode].keys[0];
+    setMode(nextMode);
+    setSelected([first]);
+    setEdits({});
+    setSelectedMonthIdx(null);
+  }
+
+  const defs = MODES[mode];
+
+  /* -------------------- Dummy monthly data (chart + per-field) -------------------- */
+
+  // EXTEND end to 2040-01
+  const monthTicks = useMemo(() => makeMonthRange("2023-01", "2040-01"), []);
+
+  // Define the last historical month (inclusive); future begins after this index
+  const HIST_START_YM = "2023-01";
+  const futureCutoffYM = "2025-08";
+  const futureCutoffIdx = useMemo(
+    () => monthTicks.indexOf(futureCutoffYM),
+    [monthTicks]
+  );
+
+  const segmentProfiles = useMemo(() => {
+    const profileByKey = {};
+    for (const key of MODES.segments.keys) {
+      const base = MODES.segments.baselines[key];
+      profileByKey[key] = buildDummyProfileForKey(key, base, monthTicks.length);
+    }
+    return { monthTicks, profileByKey };
+  }, [monthTicks]);
+
+  // Date range (defaults to current actual history: Jan 2023 → Aug 2025)
+  const [rangeStartIdx, setRangeStartIdx] = useState(() => {
+    const i = segmentProfiles.monthTicks.indexOf(HIST_START_YM);
+    return i >= 0 ? i : 0;
+  });
+  const [rangeEndIdx, setRangeEndIdx] = useState(() => {
+    const i = segmentProfiles.monthTicks.indexOf(futureCutoffYM);
+    return i >= 0 ? i : segmentProfiles.monthTicks.length - 1;
   });
 
-  // ---- Derived calculations (pure function)
-  const calc = useMemo(() => deriveAll(state), [state]);
+  /* -------------------- Derived rows -------------------- */
 
-  // ---- Chart series (profit & revenue vs price)
-  const series = useMemo(() => buildSeries(state), [state]);
-
-  // ---- Generic handler: set variable, then recalc & possibly solve
-  function handleEdit(field, rawValue) {
-    const value = toNumberSafe(rawValue);
-
-    // Clone base
-    let next = { ...state };
-
-    switch (field) {
-      case "price": {
-        next.price = clamp(value, 0.01, 1e6);
-        break;
-      }
-      case "elasticity": {
-        // keep negative elasticity typical; clamp away from 0 to avoid divide-by-zero
-        next.elasticity = clamp(value, -5, -0.05);
-        break;
-      }
-      case "base_price": {
-        next.base_price = clamp(value, 0.01, 1e6);
-        break;
-      }
-      case "base_demand": {
-        next.base_demand = clamp(value, 1, 1e9);
-        break;
-      }
-      case "vcpu": {
-        next.vcpu = clamp(value, 0, 1e6);
-        break;
-      }
-      case "fixed_cost": {
-        next.fixed_cost = clamp(value, 0, 1e12);
-        break;
-      }
-
-      // Edit a derived metric → solve back for price, then recompute
-      case "demand": {
-        const demandTarget = clamp(value, 1, 1e12);
-        next.price = invertElasticityForPrice(
-          demandTarget,
-          next.base_demand,
-          next.base_price,
-          next.elasticity
-        );
-        break;
-      }
-      case "revenue": {
-        const revenueTarget = clamp(value, 0, 1e15);
-        next.price = solvePriceForRevenue(
-          revenueTarget,
-          next.base_demand,
-          next.base_price,
-          next.elasticity
-        );
-        break;
-      }
-      case "profit": {
-        const profitTarget = value; // profit can be negative
-        next.price = solvePriceForProfit(
-          profitTarget,
-          next.base_demand,
-          next.base_price,
-          next.elasticity,
-          next.vcpu,
-          next.fixed_cost
-        );
-        break;
-      }
-      case "margin_pct": {
-        // value provided as 0..100 (%)
-        const marginTarget = clamp(value / 100, -10, 10); // allow wide, then clamp in solver
-        next.price = solvePriceForMargin(
-          marginTarget,
-          next.base_demand,
-          next.base_price,
-          next.elasticity,
-          next.vcpu,
-          next.fixed_cost
-        );
-        break;
-      }
-
-      default:
-        break;
-    }
-
-    setState(next);
-  }
-
-  function resetScenario(kind) {
-    if (kind === "Baseline") {
-      setState({
-        price: 50,
-        base_price: 50,
-        base_demand: 10000,
-        elasticity: -1.2,
-        vcpu: 20,
-        fixed_cost: 120000,
-      });
-    } else if (kind === "High FC / Low VC") {
-      setState({
-        price: 50,
-        base_price: 50,
-        base_demand: 10000,
-        elasticity: -1.0,
-        vcpu: 10,
-        fixed_cost: 400000,
-      });
-    } else if (kind === "Premium Pricing") {
-      setState({
-        price: 120,
-        base_price: 80,
-        base_demand: 7000,
-        elasticity: -0.8,
-        vcpu: 25,
-        fixed_cost: 180000,
+  const rows = useMemo(() => {
+    if (mode !== "segments") {
+      // Powertrains (unchanged)
+      return selected.map((key) => {
+        const b = defs.baselines[key];
+        const s = { ...b, ...(edits[key] || {}) };
+        const vol = computeVolume(s, b, COEFFS);
+        return { key, label: key, ...s, volume: vol };
       });
     }
+
+    const [rs, re] = getRangeBounds();
+
+    return selected.map((key) => {
+      const b = defs.baselines[key];
+
+      if (selectedMonthIdx != null) {
+        // Month selected: keep snapshot behavior
+        const s = { ...b, ...(edits[key] || {}) };
+        const vol = computeVolume(s, b, COEFFS);
+        return { key, label: key, ...s, volume: vol };
+      }
+
+      // No month selected: show range averages/totals
+      const stats = rangeStatsForKey(key, rs, re);
+      const s = {
+        ...b,
+        ...(edits[key] || {}),
+        price: stats.avgPrice,
+        fleet: stats.avgFleet,
+        lease: stats.avgLease,
+        days: stats.avgDays,
+        incentives: stats.avgIncentives,
+      };
+      return { key, label: key, ...s, volume: stats.totalVolume };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    mode,
+    selected,
+    edits,
+    selectedMonthIdx,
+    rangeStartIdx,
+    rangeEndIdx,
+    segmentProfiles,
+  ]);
+
+  /* -------------------- KPIs (range-aware in Segments mode) -------------------- */
+
+  const kpis = useMemo(() => {
+    if (mode === "segments") {
+      const rs = Math.max(
+        0,
+        Math.min(rangeStartIdx ?? 0, segmentProfiles.monthTicks.length - 1)
+      );
+      const re = Math.max(
+        rs,
+        Math.min(
+          rangeEndIdx ?? segmentProfiles.monthTicks.length - 1,
+          segmentProfiles.monthTicks.length - 1
+        )
+      );
+      const keys = selected.filter((k) => /SUV|Pickup/i.test(k));
+
+      let sumVol = 0;
+      let sumPriceVol = 0;
+      let sumFleetVol = 0;
+      let sumLeaseVol = 0;
+      let sumDaysVol = 0;
+      let sumIncVol = 0;
+
+      for (const key of keys) {
+        const prof = segmentProfiles.profileByKey[key];
+        if (!prof) continue;
+
+        for (let i = rs; i <= re; i++) {
+          const v = prof.volume[i]?.v ?? 0;
+          const p = prof.price[i] ?? 0;
+          const fleet = prof.fleet[i] ?? 0;
+          const lease = prof.lease[i] ?? 0;
+          const days = prof.days[i] ?? 0;
+          const inc = prof.incentives[i] ?? 0;
+
+          sumVol += v;
+          sumPriceVol += p * v;
+          sumFleetVol += fleet * v;
+          sumLeaseVol += lease * v;
+          sumDaysVol += days * v;
+          sumIncVol += inc * v;
+        }
+      }
+
+      const volWeighted = (sum) => (sumVol > 0 ? sum / sumVol : 0);
+
+      return {
+        totalVolume: sumVol,
+        weightedATP: volWeighted(sumPriceVol),
+        fleetMix: volWeighted(sumFleetVol),
+        leaseMix: volWeighted(sumLeaseVol),
+        daysSupply: volWeighted(sumDaysVol),
+        incentives: volWeighted(sumIncVol),
+      };
+    }
+
+    // Powertrains mode (snapshot-style)
+    const totalVolume = rows.reduce((a, r) => a + r.volume, 0);
+    const weightedATP =
+      totalVolume > 0
+        ? rows.reduce((a, r) => a + r.price * r.volume, 0) / totalVolume
+        : 0;
+    const fleetMix =
+      totalVolume > 0
+        ? rows.reduce((a, r) => a + r.fleet * r.volume, 0) / totalVolume
+        : 0;
+    const leaseMix =
+      totalVolume > 0
+        ? rows.reduce((a, r) => a + r.lease * r.volume, 0) / totalVolume
+        : 0;
+    const daysSupply =
+      totalVolume > 0
+        ? rows.reduce((a, r) => a + r.days * r.volume, 0) / totalVolume
+        : 0;
+    const incentives =
+      totalVolume > 0
+        ? rows.reduce((a, r) => a + r.incentives * r.volume, 0) / totalVolume
+        : 0;
+
+    return {
+      totalVolume,
+      weightedATP,
+      fleetMix,
+      leaseMix,
+      daysSupply,
+      incentives,
+    };
+  }, [mode, selected, rows, rangeStartIdx, rangeEndIdx, segmentProfiles]);
+
+  /* -------------------- Apply selected month to inputs -------------------- */
+
+  function applyMonthToInputs(idx) {
+    if (mode !== "segments") return;
+    setEdits((prev) => {
+      const next = { ...prev };
+      for (const key of selected) {
+        const prof = segmentProfiles.profileByKey[key];
+        if (!prof) continue;
+        const i = Math.max(
+          0,
+          Math.min(idx, segmentProfiles.monthTicks.length - 1)
+        );
+        const mNum = ymToMonthNumber(segmentProfiles.monthTicks[i]); // 1..12
+        next[key] = {
+          ...(next[key] || {}),
+          price: Math.round(prof.price[i]),
+          fleet: Math.round(prof.fleet[i]),
+          lease: Math.round(prof.lease[i]),
+          days: Math.round(prof.days[i]),
+          incentives: Math.round(prof.incentives[i]),
+          month: mNum,
+        };
+      }
+      return next;
+    });
+    setSelectedMonthIdx(idx);
   }
+
+  /* -------------------- Handlers -------------------- */
+
+  function toggleSelection(key) {
+    setSelected((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+    );
+  }
+
+  function handleChange(key, field, raw) {
+    const value = toNumberSafe(raw);
+    setEdits((prev) => {
+      const next = { ...(prev[key] || {}) };
+      if (field === "month") next.month = clamp(Math.round(value), 1, 12);
+      else if (field === "price") next.price = clamp(value, 1000, 250000);
+      else if (field === "fleet") next.fleet = clamp(value, 0, 100000);
+      else if (field === "lease") next.lease = clamp(value, 0, 100000);
+      else if (field === "days") next.days = clamp(value, 0, 400);
+      else if (field === "incentives") next.incentives = clamp(value, 0, 25000);
+      return { ...prev, [key]: next };
+    });
+  }
+
+  function resetCard(key) {
+    setEdits((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }
+
+  /* -------------------- Styles -------------------- */
 
   const card = {
     background: COLORS.panel,
@@ -168,22 +451,22 @@ export default function MarketSimulation({ COLORS, useStyles }) {
     boxSizing: "border-box",
   };
 
-  const grid = {
+  const topWrap = {
+    ...card,
+    background: "transparent",
+    border: "none",
+    padding: 18,
     display: "grid",
-    gridTemplateColumns: "repeat(2, minmax(260px, 1fr))",
-    gap: 16,
-    alignItems: "start",
+    gap: 10,
   };
 
+  const label = { color: COLORS.muted, fontSize: 12 };
   const inputRow = {
     display: "grid",
-    gridTemplateColumns: "1fr 110px", // tighter right column to avoid overflow
+    gridTemplateColumns: "1fr 110px",
     gap: 8,
     alignItems: "center",
   };
-
-  const label = { color: COLORS.muted, fontSize: 13 };
-
   const number = {
     width: "100%",
     padding: "6px 8px",
@@ -196,313 +479,566 @@ export default function MarketSimulation({ COLORS, useStyles }) {
     boxSizing: "border-box",
   };
 
-  const slider = {
-    width: "100%",
-    accentColor: COLORS.accent,
-    boxSizing: "border-box",
-  };
-
   const kpiGrid = {
     display: "grid",
-    gridTemplateColumns: "repeat(4, minmax(160px, 1fr))",
+    gridTemplateColumns: "repeat(6, minmax(160px, 1fr))",
     gap: 12,
   };
-
   const kpiCard = {
     background: "transparent",
-    border: `1px dashed ${COLORS.border}`,
+    border: "none",
     borderRadius: 12,
     padding: 12,
+    textAlign: "center", // center text
+    display: "flex", // allow vertical alignment
+    flexDirection: "column",
+    alignItems: "center", // center horizontally
+    justifyContent: "center", // center vertically
   };
 
-  // --- chart styles
-  const chartGrid = {
-    display: "grid",
-    gridTemplateColumns: "repeat(2, minmax(260px, 1fr))",
-    gap: 16,
-    marginTop: 16,
+  // Color helper
+  const hexToRgb = (hex) => {
+    const h = hex.replace("#", "");
+    const full =
+      h.length === 3
+        ? h
+            .split("")
+            .map((c) => c + c)
+            .join("")
+        : h;
+    const r = parseInt(full.slice(0, 2), 16);
+    const g = parseInt(full.slice(2, 4), 16);
+    const b = parseInt(full.slice(4, 6), 16);
+    return `${r}, ${g}, ${b}`;
   };
+
+  // Powertrains chip (simple)
+  const chip = (active) => {
+    const accent = suvAccent;
+    return {
+      padding: "6px 10px",
+      borderRadius: 999,
+      border: `1px solid ${active ? accent : COLORS.border}`,
+      background: active ? `rgba(${hexToRgb(accent)}, 0.18)` : "transparent",
+      color: COLORS.text,
+      cursor: "pointer",
+      fontSize: 13,
+      transition: "border-color 120ms ease, background-color 120ms ease",
+    };
+  };
+
+  // Segment chips (fixed width, compact)
+  const chipFixed = (active, label) => {
+    const isPickup = /Pickup/i.test(label);
+    const accent = isPickup ? PICKUP_BLUE : suvAccent;
+    return {
+      padding: "4px 8px",
+      borderRadius: 999,
+      border: `1px solid ${active ? accent : COLORS.border}`,
+      background: active ? `rgba(${hexToRgb(accent)}, 0.18)` : "transparent",
+      color: COLORS.text,
+      cursor: "pointer",
+      fontSize: 12,
+      transition: "border-color 120ms ease, background-color 120ms ease",
+      minWidth: 90,
+      textAlign: "center",
+    };
+  };
+
+  // ---- Segments chip layout (SUV row above Pickup row) ----
+  const sizesOrder = ["S", "M", "L", "XL"]; // XS removed
+
+  function renderSegmentChips() {
+    const suvLabels = sizesOrder.map((s) => `${s} SUV`);
+    const pickupLabels = sizesOrder.map((s) => `${s} Pickup`);
+
+    return (
+      <div style={{ display: "grid", gap: 8 }}>
+        {/* SUVs row */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(4, max-content)",
+            gap: 8,
+            justifyContent: "start",
+          }}
+        >
+          {suvLabels.map((label) => {
+            const active = selected.includes(label);
+            return (
+              <button
+                key={label}
+                onClick={() => toggleSelection(label)}
+                style={chipFixed(active, label)}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Pickups row */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(4, max-content)",
+            gap: 8,
+            justifyContent: "start",
+          }}
+        >
+          {pickupLabels.map((label) => {
+            const active = selected.includes(label);
+            return (
+              <button
+                key={label}
+                onClick={() => toggleSelection(label)}
+                style={chipFixed(active, label)}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  /* -------------------- Render -------------------- */
+
+  const selectedMonthLabel =
+    selectedMonthIdx == null
+      ? null
+      : ymToLabel(segmentProfiles.monthTicks[selectedMonthIdx]);
+
+  // determine whether to show dashed future (range extends past the cutoff)
+  const showFutureAsDashed = rangeEndIdx > futureCutoffIdx;
 
   return (
     <div>
-      <div
-        style={{
-          ...card,
-          background: "transparent",
-          border: "none",
-          padding: 18,
-          display: "grid",
-          gap: 10,
-        }}
-      >
+      {/* Header */}
+      <div style={topWrap}>
         <h1 style={{ ...styles.h1, margin: 0, color: "#FF5432" }}>
           Market Simulation
         </h1>
         <p style={{ color: COLORS.muted, margin: 0 }}>
-          Adjust any variable—inputs <em>or</em> outputs—and the model resolves
-          the rest.
+          Toggle <strong>Segments</strong> or <strong>Powertrains</strong>. Pick
+          any items to model. Edit inputs on each card — <em>Volume</em> updates
+          instantly. Click the chart to set a month and auto-fill inputs.
         </p>
+
+        {/* Mode toggle */}
+        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+          {[
+            { id: "segments", label: "Segments" },
+            { id: "powertrains", label: "Powertrains" },
+          ].map((m) => (
+            <button
+              key={m.id}
+              onClick={() => switchMode(m.id)}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 10,
+                border: `1px solid ${
+                  mode === m.id ? suvAccent : COLORS.border
+                }`,
+                background:
+                  mode === m.id
+                    ? `rgba(${hexToRgb(suvAccent)}, 0.18)`
+                    : "transparent",
+                color: COLORS.text,
+                cursor: "pointer",
+              }}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Chips */}
+        <div style={{ marginTop: 6 }}>
+          <div style={{ color: COLORS.muted, marginBottom: 6 }}>
+            {MODES[mode].label}: choose one or more
+          </div>
+
+          {mode === "segments" ? (
+            renderSegmentChips()
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {defs.keys.map((k) => {
+                const active = selected.includes(k);
+                return (
+                  <button
+                    key={k}
+                    onClick={() => toggleSelection(k)}
+                    style={chip(active)}
+                  >
+                    {k}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* ---- KPIs at top ---- */}
-      <div style={{ ...card, marginTop: 12 }}>
-        <div style={{ color: COLORS.muted, marginBottom: 8 }}>
-          Live KPIs (read-only)
-        </div>
-        <div style={kpiGrid}>
-          <div style={kpiCard}>
-            <div style={{ color: COLORS.muted, fontSize: 12 }}>Price</div>
-            <div style={{ fontWeight: 700 }}>${fmt(calc.price, 2)}</div>
-          </div>
-          <div style={kpiCard}>
-            <div style={{ color: COLORS.muted, fontSize: 12 }}>Demand</div>
-            <div style={{ fontWeight: 700 }}>{fmt(calc.demand, 0)}</div>
-          </div>
-          <div style={kpiCard}>
-            <div style={{ color: COLORS.muted, fontSize: 12 }}>Revenue</div>
-            <div style={{ fontWeight: 700 }}>${fmt(calc.revenue, 0)}</div>
-          </div>
-          <div style={kpiCard}>
-            <div style={{ color: COLORS.muted, fontSize: 12 }}>Profit</div>
-            <div style={{ fontWeight: 700 }}>${fmt(calc.profit, 0)}</div>
-          </div>
-        </div>
+      {/* Controls above KPIs (Segments only) */}
+      {mode === "segments" && (
         <div
           style={{
-            ...kpiGrid,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
             marginTop: 8,
+            flexWrap: "wrap",
           }}
         >
-          <div style={kpiCard}>
-            <div style={{ color: COLORS.muted, fontSize: 12 }}>Margin</div>
-            <div style={{ fontWeight: 700 }}>
-              {fmt(calc.margin_pct * 100, 2)}%
-            </div>
-          </div>
-          <div style={kpiCard}>
-            <div style={{ color: COLORS.muted, fontSize: 12 }}>Unit Margin</div>
-            <div style={{ fontWeight: 700 }}>${fmt(calc.unit_margin, 2)}</div>
-          </div>
-          <div style={kpiCard}>
-            <div style={{ color: COLORS.muted, fontSize: 12 }}>Total Cost</div>
-            <div style={{ fontWeight: 700 }}>${fmt(calc.total_cost, 0)}</div>
-          </div>
-          <div style={kpiCard}>
-            <div style={{ color: COLORS.muted, fontSize: 12 }}>
-              Var Cost / Unit
-            </div>
-            <div style={{ fontWeight: 700 }}>${fmt(state.vcpu, 2)}</div>
-          </div>
-        </div>
-      </div>
+          <span style={{ color: COLORS.muted, fontSize: 12 }}>Date range:</span>
 
-      {/* ---- Charts ---- */}
-      <div style={{ ...card, marginTop: 12 }}>
-        <div style={{ color: COLORS.muted, marginBottom: 8 }}>
-          Visualizations
-        </div>
-        <div style={chartGrid}>
-          <ChartProfit
-            COLORS={COLORS}
-            title="Profit vs. Price"
-            series={series}
-            currentPrice={state.price}
-          />
-          <ChartRevenue
-            COLORS={COLORS}
-            title="Revenue vs. Price"
-            series={series}
-            currentPrice={state.price}
-          />
-        </div>
-
-        {/* Cost breakdown at current price */}
-        <div style={{ marginTop: 16 }}>
-          <CostBreakdown COLORS={COLORS} calc={calc} />
-        </div>
-      </div>
-
-      {/* Scenario presets */}
-      <div style={{ display: "flex", gap: 8, margin: "12px 0" }}>
-        {["Baseline", "High FC / Low VC", "Premium Pricing"].map((s) => (
-          <button
-            key={s}
-            onClick={() => resetScenario(s)}
+          <select
+            value={rangeStartIdx}
+            onChange={(e) => {
+              const s = Number(e.target.value);
+              const eIdx = Math.max(s, rangeEndIdx);
+              setRangeStartIdx(s);
+              setRangeEndIdx(eIdx);
+              if (
+                selectedMonthIdx != null &&
+                (selectedMonthIdx < s || selectedMonthIdx > eIdx)
+              ) {
+                setSelectedMonthIdx(null);
+              }
+            }}
             style={{
-              padding: "8px 12px",
-              borderRadius: 10,
+              padding: "6px 8px",
+              borderRadius: 8,
               border: `1px solid ${COLORS.border}`,
-              background: "transparent",
+              background: COLORS.panel,
               color: COLORS.text,
-              cursor: "pointer",
+              fontSize: 12,
+              appearance: "none",
+              WebkitAppearance: "none",
+              MozAppearance: "none",
             }}
           >
-            {s}
+            {segmentProfiles.monthTicks.map((m, i) => (
+              <option key={`s-${m}`} value={i} style={optionStyle}>
+                {m}
+              </option>
+            ))}
+          </select>
+
+          <span style={{ color: COLORS.muted, fontSize: 12 }}>to</span>
+
+          <select
+            value={rangeEndIdx}
+            onChange={(e) => {
+              const eIdx = Number(e.target.value);
+              const s = Math.min(rangeStartIdx, eIdx);
+              setRangeStartIdx(s);
+              setRangeEndIdx(eIdx);
+              if (
+                selectedMonthIdx != null &&
+                (selectedMonthIdx < s || selectedMonthIdx > eIdx)
+              ) {
+                setSelectedMonthIdx(null);
+              }
+            }}
+            style={{
+              padding: "6px 8px",
+              borderRadius: 8,
+              border: `1px solid ${COLORS.border}`,
+              background: COLORS.panel,
+              color: COLORS.text,
+              fontSize: 12,
+              appearance: "none",
+              WebkitAppearance: "none",
+              MozAppearance: "none",
+            }}
+          >
+            {segmentProfiles.monthTicks.map((m, i) => (
+              <option key={`e-${m}`} value={i} style={optionStyle}>
+                {m}
+              </option>
+            ))}
+          </select>
+
+          <button
+            onClick={() => {
+              const startIdx =
+                segmentProfiles.monthTicks.indexOf(HIST_START_YM);
+              const endIdx = segmentProfiles.monthTicks.indexOf(futureCutoffYM);
+              const s = Math.max(0, startIdx);
+              const e = Math.max(s, endIdx);
+              setRangeStartIdx(s);
+              setRangeEndIdx(e);
+              if (
+                selectedMonthIdx != null &&
+                (selectedMonthIdx < s || selectedMonthIdx > e)
+              ) {
+                setSelectedMonthIdx(null);
+              }
+            }}
+            style={{
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: `1px solid ${COLORS.border}`,
+              background: "transparent",
+              color: COLORS.muted,
+              cursor: "pointer",
+              fontSize: 12,
+              marginLeft: 8,
+            }}
+          >
+            Reset range
           </button>
-        ))}
-      </div>
 
-      {/* Inputs & Targets */}
+          {selectedMonthIdx != null && (
+            <button
+              onClick={clearSelectedMonthToRange}
+              title="Clear selected month"
+              style={{
+                padding: "6px 10px",
+                borderRadius: 8,
+                border: `1px solid ${COLORS.border}`,
+                background: "transparent",
+                color: COLORS.muted,
+                cursor: "pointer",
+                fontSize: 12,
+              }}
+            >
+              Clear selection
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* KPIs + Chart */}
       <div style={{ ...card, marginTop: 8 }}>
-        <div style={grid}>
-          {/* Price */}
-          <div style={card}>
-            <div style={inputRow}>
-              <div>
-                <div style={label}>Price</div>
-                <input
-                  type="range"
-                  min={0}
-                  max={500}
-                  step={1}
-                  value={state.price}
-                  onChange={(e) => handleEdit("price", e.target.value)}
-                  style={slider}
-                />
-              </div>
-              <input
-                type="number"
-                value={fmt(state.price, 2)}
-                onChange={(e) => handleEdit("price", e.target.value)}
-                style={number}
-              />
+        <div style={kpiGrid}>
+          <div style={kpiCard}>
+            <div style={{ color: COLORS.muted, fontSize: 18 }}>
+              Total Volume
             </div>
-
-            <div style={{ ...inputRow, marginTop: 10 }}>
-              <div>
-                <div style={label}>Elasticity</div>
-                <input
-                  type="range"
-                  min={-3}
-                  max={-0.1}
-                  step={0.05}
-                  value={state.elasticity}
-                  onChange={(e) => handleEdit("elasticity", e.target.value)}
-                  style={slider}
-                />
-              </div>
-              <input
-                type="number"
-                value={fmt(state.elasticity, 2)}
-                onChange={(e) => handleEdit("elasticity", e.target.value)}
-                style={number}
-              />
+            <div style={{ fontWeight: 700, fontSize: 28 }}>
+              {fmt(kpis.totalVolume, 0)}
             </div>
           </div>
 
-          {/* Structure */}
-          <div style={card}>
-            <div style={inputRow}>
-              <div>
-                <div style={label}>Base Price</div>
-              </div>
-              <input
-                type="number"
-                value={fmt(state.base_price, 2)}
-                onChange={(e) => handleEdit("base_price", e.target.value)}
-                style={number}
-              />
+          <div style={kpiCard}>
+            <div style={{ color: COLORS.muted, fontSize: 18 }}>
+              Weighted ATP
             </div>
-            <div style={{ ...inputRow, marginTop: 10 }}>
-              <div>
-                <div style={label}>Base Demand</div>
-              </div>
-              <input
-                type="number"
-                value={fmt(state.base_demand, 0)}
-                onChange={(e) => handleEdit("base_demand", e.target.value)}
-                style={number}
-              />
-            </div>
-            <div style={{ ...inputRow, marginTop: 10 }}>
-              <div>
-                <div style={label}>Variable Cost / Unit</div>
-              </div>
-              <input
-                type="number"
-                value={fmt(state.vcpu, 2)}
-                onChange={(e) => handleEdit("vcpu", e.target.value)}
-                style={number}
-              />
-            </div>
-            <div style={{ ...inputRow, marginTop: 10 }}>
-              <div>
-                <div style={label}>Fixed Cost</div>
-              </div>
-              <input
-                type="number"
-                value={fmt(state.fixed_cost, 0)}
-                onChange={(e) => handleEdit("fixed_cost", e.target.value)}
-                style={number}
-              />
+            <div style={{ fontWeight: 700, fontSize: 28 }}>
+              ${fmt(kpis.weightedATP, 0)}
             </div>
           </div>
 
-          {/* Targets (edit these and the model solves for price) */}
-          <div style={card}>
-            <div style={inputRow}>
-              <div>
-                <div style={label}>Demand (units)</div>
-                <small style={{ color: COLORS.muted }}>
-                  Edit to target demand → solves price
-                </small>
-              </div>
-              <input
-                type="number"
-                value={fmt(calc.demand, 0)}
-                onChange={(e) => handleEdit("demand", e.target.value)}
-                style={number}
-              />
+          <div style={kpiCard}>
+            <div style={{ color: COLORS.muted, fontSize: 18 }}>Fleet Mix</div>
+            <div style={{ fontWeight: 700, fontSize: 28 }}>
+              {fmt(kpis.fleetMix, 1)}%
             </div>
+          </div>
 
-            <div style={{ ...inputRow, marginTop: 10 }}>
-              <div>
-                <div style={label}>Revenue</div>
-                <small style={{ color: COLORS.muted }}>
-                  Edit to target revenue → solves price
-                </small>
-              </div>
-              <input
-                type="number"
-                value={fmt(calc.revenue, 0)}
-                onChange={(e) => handleEdit("revenue", e.target.value)}
-                style={number}
-              />
+          <div style={kpiCard}>
+            <div style={{ color: COLORS.muted, fontSize: 18 }}>Lease Mix</div>
+            <div style={{ fontWeight: 700, fontSize: 28 }}>
+              {fmt(kpis.leaseMix, 1)}%
             </div>
+          </div>
 
-            <div style={{ ...inputRow, marginTop: 10 }}>
-              <div>
-                <div style={label}>Profit</div>
-                <small style={{ color: COLORS.muted }}>
-                  Edit to target profit → solves price
-                </small>
-              </div>
-              <input
-                type="number"
-                value={fmt(calc.profit, 0)}
-                onChange={(e) => handleEdit("profit", e.target.value)}
-                style={number}
-              />
+          <div style={kpiCard}>
+            <div style={{ color: COLORS.muted, fontSize: 18 }}>
+              Days' Supply
             </div>
+            <div style={{ fontWeight: 700, fontSize: 28 }}>
+              {fmt(kpis.daysSupply, 0)}
+            </div>
+          </div>
 
-            <div style={{ ...inputRow, marginTop: 10 }}>
-              <div>
-                <div style={label}>Margin %</div>
-                <small style={{ color: COLORS.muted }}>
-                  Edit to target margin → solves price
-                </small>
-              </div>
-              <input
-                type="number"
-                value={fmt(calc.margin_pct * 100, 2)}
-                onChange={(e) => handleEdit("margin_pct", e.target.value)}
-                style={number}
-              />
+          <div style={kpiCard}>
+            <div style={{ color: COLORS.muted, fontSize: 18 }}>Incentives</div>
+            <div style={{ fontWeight: 700, fontSize: 28 }}>
+              ${fmt(kpis.incentives, 0)}
             </div>
           </div>
         </div>
+
+        {/* Segments Line Chart (selected segments only) */}
+        {mode === "segments" && (
+          <div style={{ marginTop: 14 }}>
+            <SegmentsLineChart
+              COLORS={COLORS}
+              monthTicks={segmentProfiles.monthTicks}
+              seriesByKey={Object.fromEntries(
+                Object.entries(segmentProfiles.profileByKey).map(([k, v]) => [
+                  k,
+                  v.volume,
+                ])
+              )}
+              selectedKeys={selected.filter((k) => /SUV|Pickup/.test(k))}
+              suvAccent={suvAccent}
+              pickupBlue={PICKUP_BLUE}
+              selectedIndex={selectedMonthIdx}
+              onSelectIndex={applyMonthToInputs}
+              rangeStart={rangeStartIdx}
+              rangeEnd={rangeEndIdx}
+              futureCutoffIdx={futureCutoffIdx}
+              showFutureAsDashed={showFutureAsDashed}
+            />
+          </div>
+        )}
       </div>
-      {/* Signature (bottom-right, nudged left) */}
+
+      {/* Cards per selection */}
+      <div style={{ ...card, marginTop: 12 }}>
+        <div
+          style={{
+            color: COLORS.muted,
+            marginBottom: 8,
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 8,
+            alignItems: "center",
+          }}
+        >
+          <span>Adjust inputs to simulate volume</span>
+          {selectedMonthLabel && (
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ color: COLORS.muted }}>
+                Selected month:{" "}
+                <strong style={{ color: COLORS.text }}>
+                  {selectedMonthLabel}
+                </strong>
+              </span>
+            </span>
+          )}
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+            gap: 12,
+            alignItems: "stretch",
+          }}
+        >
+          {rows.map((r) => {
+            const base = defs.baselines[r.key];
+            return (
+              <div
+                key={r.key}
+                style={{
+                  border: `1px solid ${COLORS.border}`,
+                  borderRadius: 12,
+                  padding: 12,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "baseline",
+                    justifyContent: "space-between",
+                    marginBottom: 8,
+                  }}
+                >
+                  <div style={{ fontWeight: 700 }}>{r.label}</div>
+                </div>
+
+                {/* Volume (highlight) */}
+                <div
+                  style={{
+                    border: "none",
+                    borderRadius: 10,
+                    padding: 10,
+                    marginBottom: 10,
+                  }}
+                >
+                  <div style={{ color: COLORS.muted, fontSize: 16 }}>
+                    Volume
+                  </div>
+                  <div style={{ fontWeight: 800, fontSize: 24 }}>
+                    {fmt(r.volume, 0)}
+                  </div>
+                </div>
+
+                {/* Inputs (populated by chart selection) */}
+                <div style={inputRow}>
+                  <div>
+                    <div style={label}>Weighted Avg Transaction Price</div>
+                  </div>
+                  <input
+                    type="number"
+                    value={fmt(r.price, 0)}
+                    onChange={(e) =>
+                      handleChange(r.key, "price", e.target.value)
+                    }
+                    style={number}
+                  />
+                </div>
+
+                <div style={{ ...inputRow, marginTop: 10 }}>
+                  <div>
+                    <div style={label}>Fleet Mix (%)</div>
+                  </div>
+                  <input
+                    type="number"
+                    value={fmt(r.fleet, 0)}
+                    onChange={(e) =>
+                      handleChange(r.key, "fleet", e.target.value)
+                    }
+                    style={number}
+                  />
+                </div>
+
+                <div style={{ ...inputRow, marginTop: 10 }}>
+                  <div>
+                    <div style={label}>Lease Mix (%)</div>
+                  </div>
+                  <input
+                    type="number"
+                    value={fmt(r.lease, 0)}
+                    onChange={(e) =>
+                      handleChange(r.key, "lease", e.target.value)
+                    }
+                    style={number}
+                  />
+                </div>
+
+                <div style={{ ...inputRow, marginTop: 10 }}>
+                  <div>
+                    <div style={label}>Days Supply</div>
+                  </div>
+                  <input
+                    type="number"
+                    value={fmt(r.days, 0)}
+                    onChange={(e) =>
+                      handleChange(r.key, "days", e.target.value)
+                    }
+                    style={number}
+                  />
+                </div>
+
+                <div style={{ ...inputRow, marginTop: 10 }}>
+                  <div>
+                    <div style={label}>Incentives ($)</div>
+                  </div>
+                  <input
+                    type="number"
+                    value={fmt(r.incentives, 0)}
+                    onChange={(e) =>
+                      handleChange(r.key, "incentives", e.target.value)
+                    }
+                    style={number}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Signature */}
       <div
         style={{
           display: "flex",
@@ -517,413 +1053,602 @@ export default function MarketSimulation({ COLORS, useStyles }) {
           style={{ width: 50, height: "auto", opacity: 0.9 }}
         />
       </div>
-
-      {/* Tiny hint */}
-      <p style={{ color: COLORS.muted, marginTop: 10, fontSize: 12 }}>
-        Tip: try setting a profit target (e.g., 200000) — the model will solve a
-        price that hits it.
-      </p>
     </div>
   );
 }
 
-/* -------------------- Visualization Components -------------------- */
+/* -------------------- Segments Line Chart (hover tooltips + click select + range + future-dashed) -------------------- */
 
-function ChartProfit({ COLORS, title, series, currentPrice }) {
-  const w = 520,
-    h = 220,
-    pad = 32;
-  const { minPrice, maxPrice, maxY, mapX, mapY } = useScales(
-    series,
-    w,
-    h,
-    pad,
-    "profit"
+function SegmentsLineChart(props) {
+  const {
+    COLORS,
+    monthTicks,
+    seriesByKey, // { key: [{i, v}, ...] }
+    selectedKeys,
+    suvAccent,
+    pickupBlue,
+    selectedIndex, // persistent selection index
+    onSelectIndex, // callback(idx)
+    rangeStart, // start index (inclusive)
+    rangeEnd, // end index (inclusive)
+    futureCutoffIdx, // index of last historical month (e.g., 2025-08)
+    showFutureAsDashed, // boolean flag to render future (cutoff+1..re) dashed
+  } = props;
+
+  const svgRef = React.useRef(null);
+  const [hoverI, setHoverI] = React.useState(null);
+  const [hoverXsvg, setHoverXsvg] = React.useState(null);
+  const [hoverLeftCss, setHoverLeftCss] = React.useState(null);
+
+  const w = 1080;
+  const h = 300;
+  const padL = 40,
+    padR = 24,
+    padT = 18,
+    padB = 36;
+
+  // Range-aware indices
+  const rs = Math.max(0, Math.min(rangeStart ?? 0, monthTicks.length - 1));
+  const re = Math.max(
+    rs,
+    Math.min(rangeEnd ?? monthTicks.length - 1, monthTicks.length - 1)
   );
-  const line = toPath(series.map((p) => [mapX(p.price), mapY(p.profit)]));
+  const xMax = re - rs;
 
-  const markerX = mapX(currentPrice);
-  const markerY = mapY(yAt(series, currentPrice, "profit"));
+  const lines = selectedKeys
+    .filter((k) => seriesByKey[k])
+    .map((k) => ({ key: k, values: seriesByKey[k] }));
+
+  const globalMax = Math.max(
+    1,
+    ...Object.values(seriesByKey)
+      .flat()
+      .map((d) => d.v)
+  );
+
+  const mapX = (i) => padL + ((i - rs) / Math.max(1, xMax)) * (w - padL - padR);
+  const mapY = (v) => h - padB - (v / globalMax) * (h - padT - padB);
+
+  // ~5 ticks across the range
+  const tickCount = 5;
+  const tickIdxs = Array.from({ length: tickCount }, (_, i) =>
+    Math.round(rs + (i / (tickCount - 1)) * xMax)
+  );
+
+  const legendItems = lines.map((ln) => ({
+    key: ln.key,
+    color: colorForSegment(ln.key, suvAccent, pickupBlue),
+  }));
+
+  // Convert client CSS pixels to SVG coords
+  function clientToSvg(evt) {
+    if (!svgRef.current) return null;
+    const pt = svgRef.current.createSVGPoint();
+    pt.x = evt.clientX;
+    pt.y = evt.clientY;
+    const ctm = svgRef.current.getScreenCTM();
+    if (!ctm) return null;
+    return pt.matrixTransform(ctm.inverse());
+  }
+
+  function handleMove(e) {
+    const p = clientToSvg(e);
+    if (!p) return;
+
+    const xSvg = Math.max(padL, Math.min(w - padR, p.x));
+    const t = (xSvg - padL) / (w - padL - padR);
+    const i = Math.round(rs + t * xMax);
+
+    const rect = svgRef.current.getBoundingClientRect();
+    const leftCss = (xSvg / w) * rect.width;
+
+    setHoverI(i >= rs && i <= re ? i : null);
+    setHoverXsvg(i >= rs && i <= re ? xSvg : null);
+    setHoverLeftCss(leftCss);
+  }
+
+  function handleLeave() {
+    setHoverI(null);
+    setHoverXsvg(null);
+    setHoverLeftCss(null);
+  }
+
+  function handleClick() {
+    if (hoverI != null && onSelectIndex) onSelectIndex(hoverI);
+  }
+
+  const tooltipData =
+    hoverI == null
+      ? null
+      : lines
+          .map((ln) => ({
+            key: ln.key,
+            color: colorForSegment(ln.key, suvAccent, pickupBlue),
+            v: ln.values[hoverI]?.v ?? 0,
+          }))
+          .sort((a, b) => b.v - a.v);
+
+  const hoverMonthLabel = hoverI == null ? "" : ymToLabel(monthTicks[hoverI]);
+
+  // helpers to make SVG path strings
+  const toPath = (points) =>
+    !points.length
+      ? ""
+      : points.map(([x, y], i) => (i ? `L${x},${y}` : `M${x},${y}`)).join(" ");
 
   return (
     <div
       style={{
-        border: `1px solid ${COLORS.border}`,
-        borderRadius: 12,
-        padding: 12,
-      }}
-    >
-      <div style={{ color: COLORS.muted, marginBottom: 8 }}>{title}</div>
-      <svg width="100%" viewBox={`0 0 ${w} ${h}`} role="img">
-        {/* axes */}
-        <Axes
-          w={w}
-          h={h}
-          pad={pad}
-          COLORS={COLORS}
-          maxY={maxY}
-          minPrice={minPrice}
-          maxPrice={maxPrice}
-        />
-        {/* curve */}
-        <path d={line} fill="none" stroke={COLORS.accent} strokeWidth="2" />
-        {/* current marker */}
-        <line
-          x1={markerX}
-          x2={markerX}
-          y1={pad}
-          y2={h - pad}
-          stroke={COLORS.border}
-          strokeDasharray="4 4"
-        />
-        <circle cx={markerX} cy={markerY} r="4" fill={COLORS.accent} />
-      </svg>
-    </div>
-  );
-}
-
-function ChartRevenue({ COLORS, title, series, currentPrice }) {
-  const w = 520,
-    h = 220,
-    pad = 32;
-  const { minPrice, maxPrice, maxY, mapX, mapY } = useScales(
-    series,
-    w,
-    h,
-    pad,
-    "revenue"
-  );
-  const line = toPath(series.map((p) => [mapX(p.price), mapY(p.revenue)]));
-
-  const markerX = mapX(currentPrice);
-  const markerY = mapY(yAt(series, currentPrice, "revenue"));
-
-  return (
-    <div
-      style={{
-        border: `1px solid ${COLORS.border}`,
-        borderRadius: 12,
-        padding: 12,
-      }}
-    >
-      <div style={{ color: COLORS.muted, marginBottom: 8 }}>{title}</div>
-      <svg width="100%" viewBox={`0 0 ${w} ${h}`} role="img">
-        {/* axes */}
-        <Axes
-          w={w}
-          h={h}
-          pad={pad}
-          COLORS={COLORS}
-          maxY={maxY}
-          minPrice={minPrice}
-          maxPrice={maxPrice}
-        />
-        {/* curve */}
-        <path
-          d={line}
-          fill="none"
-          stroke={COLORS.text}
-          strokeWidth="2"
-          opacity="0.85"
-        />
-        {/* current marker */}
-        <line
-          x1={markerX}
-          x2={markerX}
-          y1={pad}
-          y2={h - pad}
-          stroke={COLORS.border}
-          strokeDasharray="4 4"
-        />
-        <circle cx={markerX} cy={markerY} r="4" fill={COLORS.text} />
-      </svg>
-    </div>
-  );
-}
-
-function CostBreakdown({ COLORS, calc }) {
-  const w = 1080,
-    h = 140,
-    pad = 24;
-  const rev = Math.max(0, calc.revenue);
-  const cost = Math.max(0, calc.total_cost);
-  const max = Math.max(rev, cost, 1);
-
-  const revW = ((rev / max) * (w - pad * 2)) | 0;
-  const costW = ((cost / max) * (w - pad * 2)) | 0;
-
-  return (
-    <div
-      style={{
-        border: `1px solid ${COLORS.border}`,
-        borderRadius: 12,
-        padding: 12,
+        borderTop: `1px dashed ${COLORS.border}`,
+        paddingTop: 12,
+        position: "relative",
       }}
     >
       <div style={{ color: COLORS.muted, marginBottom: 8 }}>
-        Revenue vs Total Cost (current price)
+        Volume Over Time (Selected Segments)
       </div>
-      <svg width="100%" viewBox={`0 0 ${w} ${h}`} role="img">
-        <rect
-          x={pad}
-          y={30}
-          width={revW}
-          height={22}
-          fill={COLORS.accent}
-          rx="6"
-        />
-        <text x={pad} y={26} fontSize="12" fill={COLORS.muted}>
-          Revenue: ${fmt(rev, 0)}
-        </text>
 
-        <rect
-          x={pad}
-          y={90}
-          width={costW}
-          height={22}
-          fill={COLORS.text}
-          opacity="0.35"
-          rx="6"
-        />
-        <text x={pad} y={86} fontSize="12" fill={COLORS.muted}>
-          Total Cost: ${fmt(cost, 0)}
-        </text>
-      </svg>
+      {/* Legend */}
+      {legendItems.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 10,
+            alignItems: "center",
+            marginBottom: 6,
+          }}
+        >
+          {legendItems.map((it) => (
+            <div
+              key={it.key}
+              style={{ display: "flex", alignItems: "center", gap: 6 }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: 999,
+                  background: it.color,
+                }}
+              />
+              <span style={{ fontSize: 12, color: COLORS.muted }}>
+                {it.key}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ position: "relative" }}>
+        <svg
+          ref={svgRef}
+          width="100%"
+          viewBox={`0 0 ${w} ${h}`}
+          role="img"
+          onMouseMove={handleMove}
+          onMouseLeave={handleLeave}
+          onClick={handleClick}
+          style={{ display: "block", cursor: "crosshair" }}
+        >
+          {/* Future projection background */}
+          {showFutureAsDashed && futureCutoffIdx < re && (
+            <rect
+              x={mapX(Math.max(rs, futureCutoffIdx + 1))}
+              y={padT}
+              width={Math.max(
+                1,
+                mapX(re) - mapX(Math.max(rs, futureCutoffIdx + 1))
+              )}
+              height={h - padT - padB}
+              fill={
+                COLORS.panel === "#fff"
+                  ? "rgba(0,0,0,0.04)"
+                  : "rgba(255,255,255,0.05)"
+              }
+              /* Light gray in light mode, light haze in dark mode */
+            />
+          )}
+
+          {/* Axes */}
+          <line
+            x1={padL}
+            y1={h - padB}
+            x2={w - padR}
+            y2={h - padB}
+            stroke={COLORS.border}
+          />
+          <line
+            x1={padL}
+            y1={padT}
+            x2={padL}
+            y2={h - padB}
+            stroke={COLORS.border}
+          />
+
+          {/* X ticks & labels (range-aware) */}
+          {tickIdxs.map((ti, idx) => (
+            <g key={`t-${idx}`}>
+              <line
+                x1={mapX(ti)}
+                y1={h - padB}
+                x2={mapX(ti)}
+                y2={h - padB + 4}
+                stroke={COLORS.border}
+              />
+              <text
+                x={mapX(ti)}
+                y={h - padB + 16}
+                fontSize="10"
+                textAnchor="middle"
+                fill={COLORS.muted}
+              >
+                {monthTicks[ti]}
+              </text>
+            </g>
+          ))}
+
+          {/* Lines (split into past solid + future dashed if applicable) */}
+          {lines.map((ln) => {
+            const stroke = colorForSegment(ln.key, suvAccent, pickupBlue);
+
+            // Past segment: rs .. min(re, futureCutoffIdx)
+            const pastEnd = Math.min(re, futureCutoffIdx);
+            const pastPts = [];
+            for (let i = rs; i <= pastEnd; i++) {
+              const v = ln.values[i]?.v ?? 0;
+              pastPts.push([mapX(i), mapY(v)]);
+            }
+
+            // Future segment: max(rs, futureCutoffIdx+1) .. re
+            const futStart = Math.max(rs, futureCutoffIdx + 1);
+            const futPts = [];
+            for (let i = futStart; i <= re; i++) {
+              const v = ln.values[i]?.v ?? 0;
+              futPts.push([mapX(i), mapY(v)]);
+            }
+
+            // --- BRIDGE: prepend the Aug-2025 point to the dotted path so we draw the Aug→Sep segment dotted ---
+            let futPtsWithBridge = futPts;
+            if (showFutureAsDashed && futPts.length > 0 && pastPts.length > 0) {
+              const vPastEnd = ln.values[pastEnd]?.v ?? 0;
+              const augPoint = [mapX(pastEnd), mapY(vPastEnd)];
+              futPtsWithBridge = [augPoint, ...futPts];
+            }
+
+            return (
+              <g key={ln.key}>
+                {/* Solid past path */}
+                {pastPts.length > 1 && (
+                  <path
+                    d={toPath(pastPts)}
+                    fill="none"
+                    stroke={stroke}
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  />
+                )}
+
+                {/* Dotted future path (with bridge) */}
+                {showFutureAsDashed && futPtsWithBridge.length > 1 && (
+                  <path
+                    d={toPath(futPtsWithBridge)}
+                    fill="none"
+                    stroke={stroke}
+                    strokeWidth="2"
+                    strokeDasharray="2 6"
+                    strokeLinecap="round"
+                  />
+                )}
+
+                {/* If future not dashed, draw normally */}
+                {!showFutureAsDashed && futPts.length > 1 && (
+                  <path
+                    d={toPath(futPts)}
+                    fill="none"
+                    stroke={stroke}
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  />
+                )}
+              </g>
+            );
+          })}
+
+          {/* Persistent selected vertical line (if within range) */}
+          {selectedIndex != null &&
+            selectedIndex >= rs &&
+            selectedIndex <= re && (
+              <line
+                x1={mapX(selectedIndex)}
+                x2={mapX(selectedIndex)}
+                y1={padT}
+                y2={h - padB}
+                stroke={COLORS.text}
+                opacity="0.4"
+                strokeWidth="2"
+              />
+            )}
+
+          {/* Hover guide + markers */}
+          {hoverI != null && hoverXsvg != null && (
+            <g>
+              <line
+                x1={hoverXsvg}
+                x2={hoverXsvg}
+                y1={padT}
+                y2={h - padB}
+                stroke={COLORS.border}
+                strokeDasharray="4 4"
+              />
+              {lines.map((ln) => {
+                const v = ln.values[hoverI]?.v ?? 0;
+                return (
+                  <circle
+                    key={`pt-${ln.key}`}
+                    cx={hoverXsvg}
+                    cy={mapY(v)}
+                    r="3.5"
+                    fill={colorForSegment(ln.key, suvAccent, pickupBlue)}
+                  />
+                );
+              })}
+            </g>
+          )}
+        </svg>
+
+        {/* Tooltip */}
+        {hoverI != null &&
+          hoverLeftCss != null &&
+          tooltipData &&
+          tooltipData.length > 0 && (
+            <div
+              style={{
+                position: "absolute",
+                left: clampPx(hoverLeftCss + 12, 8, "calc(100% - 220px)"),
+                top: padT + 6,
+                background: COLORS.panel,
+                color: COLORS.text,
+                border: `1px solid ${COLORS.border}`,
+                borderRadius: 8,
+                padding: "8px 10px",
+                fontSize: 12,
+                boxShadow: "0 4px 12px rgba(0,0,0,0.22)",
+                pointerEvents: "none",
+                minWidth: 180,
+                transform: "translateZ(0)",
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                {hoverMonthLabel}
+              </div>
+              {tooltipData.map((row) => (
+                <div
+                  key={`tt-${row.key}`}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 10,
+                    marginTop: 2,
+                  }}
+                >
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: 6 }}
+                  >
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: 999,
+                        background: row.color,
+                      }}
+                    />
+                    <span style={{ color: COLORS.muted }}>{row.key}</span>
+                  </div>
+                  <div style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {fmt(row.v, 0)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+      </div>
     </div>
   );
 }
 
-/* -------------------- Chart helpers -------------------- */
+/* -------------------- Dummy profile builder (per-field monthly values) -------------------- */
 
-function buildSeries(s) {
-  // price range around base_price (0.1x .. 3x), 100 samples
-  const min = Math.max(0.01, s.base_price * 0.1);
-  const max = s.base_price * 3;
-  const n = 100;
-  const step = (max - min) / (n - 1);
+function buildDummyProfileForKey(key, base, n) {
+  const rnd = mulberry32(hashString(key));
+  const season = (i, amp = 0.1) => 1 + amp * Math.sin((2 * Math.PI * i) / 12);
+  const noise = (amp = 0.03) => 1 + (rnd() - 0.5) * (2 * amp); // ±amp
+  const trend = (i, slope = 0.0015) => 1 + slope * i;
 
-  const pts = [];
-  for (let i = 0; i < n; i++) {
-    const price = min + i * step;
-    const d = s.base_demand * Math.pow(price / s.base_price, s.elasticity);
-    const revenue = price * d;
-    const total_cost = s.fixed_cost + s.vcpu * d;
-    const profit = revenue - total_cost;
-    pts.push({ price, revenue, profit });
-  }
-  return pts;
-}
-
-function useScales(series, w, h, pad, key) {
-  const minPrice = Math.min(...series.map((p) => p.price));
-  const maxPrice = Math.max(...series.map((p) => p.price));
-  const maxY = Math.max(...series.map((p) => Math.max(0, p[key]))); // clamp below 0 for domain
-  const minY = Math.min(0, Math.min(...series.map((p) => p[key])));
-
-  const mapX = (price) =>
-    pad + ((price - minPrice) / (maxPrice - minPrice)) * (w - pad * 2);
-  const mapY = (val) =>
-    // y grows downward; map minY..maxY into h-pad..pad
-    h - pad - ((val - minY) / (maxY - minY || 1)) * (h - pad * 2);
-
-  return { minPrice, maxPrice, maxY, minY, mapX, mapY };
-}
-
-function toPath(points) {
-  if (!points.length) return "";
-  return points.map(([x, y], i) => (i ? `L${x},${y}` : `M${x},${y}`)).join(" ");
-}
-
-function yAt(series, xPrice, key) {
-  // nearest-neighbor lookup for marker
-  let best = series[0],
-    bestDist = Math.abs(xPrice - series[0].price);
-  for (let i = 1; i < series.length; i++) {
-    const d = Math.abs(xPrice - series[i].price);
-    if (d < bestDist) {
-      best = series[i];
-      bestDist = d;
-    }
-  }
-  return best[key];
-}
-
-function Axes({ w, h, pad, COLORS, maxY, minPrice, maxPrice }) {
-  const x1 = pad,
-    x2 = w - pad,
-    y = h - pad;
-  const y1 = pad,
-    y2 = h - pad,
-    x = pad;
-
-  return (
-    <g>
-      {/* axes */}
-      <line x1={x1} y1={y} x2={x2} y2={y} stroke={COLORS.border} />
-      <line x1={x} y1={y1} x2={x} y2={y2} stroke={COLORS.border} />
-
-      {/* ticks */}
-      {Array.from({ length: 5 }).map((_, i) => {
-        const t = i / 4;
-        const px = x1 + t * (x2 - x1);
-        const price = minPrice + t * (maxPrice - minPrice);
-        return (
-          <g key={i}>
-            <line x1={px} y1={y} x2={px} y2={y + 4} stroke={COLORS.border} />
-            <text
-              x={px}
-              y={y + 16}
-              fontSize="10"
-              textAnchor="middle"
-              fill={COLORS.muted}
-            >
-              ${fmt(price, 0)}
-            </text>
-          </g>
-        );
-      })}
-      {/* y max label */}
-      <text
-        x={x}
-        y={y1 - 6}
-        fontSize="10"
-        textAnchor="start"
-        fill={COLORS.muted}
-      >
-        {`Max: $${fmt(maxY, 0)}`}
-      </text>
-    </g>
+  const price = Array.from(
+    { length: n },
+    (_, i) => base.price * season(i, 0.06) * trend(i, 0.0008) * noise(0.015)
   );
+  const fleet = Array.from(
+    { length: n },
+    (_, i) => base.fleet * season(i, 0.04) * noise(0.02)
+  );
+  const lease = Array.from(
+    { length: n },
+    (_, i) => base.lease * season(i, 0.03) * noise(0.02)
+  );
+  const days = Array.from(
+    { length: n },
+    (_, i) => base.days * (2 - season(i, 0.08)) * noise(0.03) // loosely counter-seasonal
+  );
+  const incentives = Array.from(
+    { length: n },
+    (_, i) => base.incentives * season(i, 0.12) * noise(0.05)
+  );
+  const volume = Array.from(
+    { length: n },
+    (_, i) => base.base_volume * season(i, 0.1) * trend(i, 0.002) * noise(0.04)
+  ).map((v) => ({ v: Math.max(1, v) }));
+
+  return { price, fleet, lease, days, incentives, volume };
 }
 
-/* -------------------- Math helpers -------------------- */
+/* -------------------- Shared helpers -------------------- */
 
-// compute everything from the current state
-function deriveAll(s) {
-  const demand = s.base_demand * Math.pow(s.price / s.base_price, s.elasticity);
-  const revenue = s.price * demand;
-  const var_cost_total = s.vcpu * demand;
-  const total_cost = s.fixed_cost + var_cost_total;
-  const profit = revenue - total_cost;
-  const margin_pct = revenue > 0 ? profit / revenue : 0;
-  const unit_margin = s.price - s.vcpu;
-
-  return {
-    price: s.price,
-    demand,
-    revenue,
-    total_cost,
-    var_cost_total,
-    profit,
-    margin_pct,
-    unit_margin,
-  };
+function ymToLabel(ym) {
+  const [y, m] = ym.split("-").map((x) => parseInt(x, 10));
+  const d = new Date(Date.UTC(y, m - 1, 1));
+  return d.toLocaleString(undefined, {
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+function ymToMonthNumber(ym) {
+  return parseInt(ym.split("-")[1], 10); // 1..12
 }
 
-// invert elasticity equation to find price given demand
-function invertElasticityForPrice(demand, base_demand, base_price, elasticity) {
-  // demand = base_demand * (price / base_price) ^ elasticity
-  // (demand / base_demand) = (price / base_price)^elasticity
-  // price = base_price * (demand / base_demand)^(1/elasticity)
-  const ratio = clamp(demand / base_demand, 1e-12, 1e12);
-  const inv = 1 / elasticity; // negative → flip
-  const price = base_price * Math.pow(ratio, inv);
-  return clamp(price, 0.01, 1e6);
-}
-
-// solve for price that achieves target revenue
-function solvePriceForRevenue(
-  targetRevenue,
-  base_demand,
-  base_price,
-  elasticity
-) {
-  const f = (p) =>
-    p * base_demand * Math.pow(p / base_price, elasticity) - targetRevenue;
-  return bisectPrice(f, 0.01, base_price * 100, 60);
-}
-
-// solve for price that achieves target profit
-function solvePriceForProfit(
-  targetProfit,
-  base_demand,
-  base_price,
-  elasticity,
-  vcpu,
-  fixed_cost
-) {
-  const f = (p) => {
-    const d = base_demand * Math.pow(p / base_price, elasticity);
-    const revenue = p * d;
-    const total_cost = fixed_cost + vcpu * d;
-    return revenue - total_cost - targetProfit;
-  };
-  return bisectPrice(f, 0.01, base_price * 100, 60);
-}
-
-// solve for price that achieves target margin (profit / revenue)
-function solvePriceForMargin(
-  targetMargin,
-  base_demand,
-  base_price,
-  elasticity,
-  vcpu,
-  fixed_cost
-) {
-  const m = clamp(targetMargin, -5, 5); // broad but sane
-  const f = (p) => {
-    const d = base_demand * Math.pow(p / base_price, elasticity);
-    const revenue = p * d;
-    const total_cost = fixed_cost + vcpu * d;
-    const profit = revenue - total_cost;
-    const margin = revenue > 0 ? profit / revenue : -1;
-    return margin - m;
-  };
-  return bisectPrice(f, 0.01, base_price * 200, 70);
-}
-
-// simple binary search root finder on [lo, hi]
-function bisectPrice(f, lo, hi, iters = 50) {
-  // Ensure bracketed root by expanding bounds if needed
-  let a = lo,
-    b = hi;
-  let fa = f(a),
-    fb = f(b);
-  let expand = 0;
-  while (fa * fb > 0 && expand < 10) {
-    // expand outward multiplicatively
-    a = Math.max(0.01, a / 2);
-    b = b * 2;
-    fa = f(a);
-    fb = f(b);
-    expand++;
-  }
-  // If still not bracketed, just return mid as best effort
-  if (fa * fb > 0) return clamp((a + b) / 2, 0.01, 1e6);
-
-  for (let i = 0; i < iters; i++) {
-    const mid = 0.5 * (a + b);
-    const fm = f(mid);
-    if (Math.abs(fm) < 1e-6) return clamp(mid, 0.01, 1e6);
-    // choose side that changes sign
-    if (fa * fm < 0) {
-      b = mid;
-      fb = fm;
-    } else {
-      a = mid;
-      fa = fm;
+function makeMonthRange(startYM, endYM) {
+  const [sY, sM] = startYM.split("-").map((n) => parseInt(n, 10));
+  const [eY, eM] = endYM.split("-").map((n) => parseInt(n, 10));
+  const out = [];
+  let y = sY,
+    m = sM;
+  while (y < eY || (y === eY && m <= eM)) {
+    out.push(`${y}-${String(m).padStart(2, "0")}`);
+    m++;
+    if (m > 12) {
+      m = 1;
+      y++;
     }
   }
-  return clamp(0.5 * (a + b), 0.01, 1e6);
+  return out;
 }
 
-// utils
-function clamp(v, lo, hi) {
-  return Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : lo));
+function colorForSegment(label, suvAccent, pickupBlue) {
+  const isPickup = /Pickup/i.test(label);
+  const base = isPickup ? pickupBlue : suvAccent;
+  const t = (hashString(label) % 40) - 20; // -20..+19
+  return shiftHexLightness(base, t / 200); // subtle ±10% L
 }
+
+function mulberry32(a) {
+  return function () {
+    let t = (a += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function hashString(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+  return h >>> 0;
+}
+function shiftHexLightness(hex, amt = 0) {
+  const h = hex.replace("#", "");
+  const full =
+    h.length === 3
+      ? h
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : h;
+  let r = parseInt(full.slice(0, 2), 16);
+  let g = parseInt(full.slice(2, 4), 16);
+  let b = parseInt(full.slice(4, 6), 16);
+  const { h: H, s: S, l: L } = rgbToHsl(r, g, b);
+  const L2 = clamp(L + amt, 0, 1);
+  const { r: R, g: G, b: B } = hslToRgb(H, S, L2);
+  const to2 = (x) => x.toString(16).padStart(2, "0");
+  return `#${to2(R)}${to2(G)}${to2(B)}`;
+}
+function rgbToHsl(r, g, b) {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const max = Math.max(r, g, b),
+    min = Math.min(r, g, b);
+  let h, s;
+  const l = (max + min) / 2;
+  if (max === min) {
+    h = s = 0;
+  } else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r:
+        h = (g - b) / d + (g < b ? 6 : 1);
+        break;
+      case g:
+        h = (b - r) / d + 3;
+        break;
+      default:
+        h = (r - g) / d + 5;
+    }
+    h /= 6;
+  }
+  return { h, s, l };
+}
+function hslToRgb(h, s, l) {
+  if (s === 0) {
+    const v = Math.round(l * 255);
+    return { r: v, g: v, b: v };
+  }
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const r = Math.round(hue2rgb(p, q, h + 1 / 3) * 255);
+  const g = Math.round(hue2rgb(p, q, h) * 255);
+  const b = Math.round(hue2rgb(p, q, h - 1 / 3) * 255);
+  return { r, g, b };
+}
+
+/* -------------------- Model -------------------- */
+
+function computeVolume(s, base, K) {
+  const priceFactor = Math.pow(s.price / base.price, K.E_PRICE);
+  const fleetFactor = Math.exp(
+    K.B_FLEET_PER10PP * ((s.fleet - base.fleet) / 10)
+  );
+  const leaseFactor = Math.exp(
+    K.B_LEASE_PER10PP * ((s.lease - base.lease) / 10)
+  );
+  const daysFactor = Math.exp(K.B_DAYS_PER10 * ((s.days - base.days) / 10));
+  const incFactor = Math.exp(
+    K.B_INCENTIVES_PER_K * ((s.incentives - base.incentives) / 1000)
+  );
+  const vol =
+    base.base_volume *
+    priceFactor *
+    fleetFactor *
+    leaseFactor *
+    daysFactor *
+    incFactor;
+  return Math.max(0, vol);
+}
+
+/* -------------------- Utils -------------------- */
+
 function toNumberSafe(v) {
   const n = parseFloat(v);
   return Number.isFinite(n) ? n : 0;
+}
+function clamp(v, lo, hi) {
+  return Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : lo));
 }
 function fmt(v, digits = 0) {
   if (!Number.isFinite(v)) return "";
@@ -934,4 +1659,10 @@ function fmt(v, digits = 0) {
         minimumFractionDigits: digits,
         maximumFractionDigits: digits,
       });
+}
+// clamp a pixel value within container bounds, supports 'calc(100% - Xpx)'
+function clampPx(px, minPx, max) {
+  if (typeof max === "number") return `${Math.max(minPx, Math.min(px, max))}px`;
+  const n = parseInt(String(max).match(/- (\d+)px/)?.[1] || "240", 10);
+  return `min(max(${px}px, ${minPx}px), calc(100% - ${n}px))`;
 }
