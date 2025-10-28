@@ -187,8 +187,9 @@ export default function MarketSimulation({ COLORS, useStyles }) {
       selected: DEFAULT_SELECTED.segments,
       edits: {},
       selectedMonthIdx: null,
-      rangeStartIdx: null, // ← start as null so we can set real defaults once monthTicks ready
+      rangeStartIdx: null,
       rangeEndIdx: null,
+      applyScope: "month", // ← NEW: 'month' | 'year'
     },
     powertrains: {
       selected: DEFAULT_SELECTED.powertrains,
@@ -196,6 +197,7 @@ export default function MarketSimulation({ COLORS, useStyles }) {
       selectedMonthIdx: null,
       rangeStartIdx: null,
       rangeEndIdx: null,
+      applyScope: "month", // ← NEW: 'month' | 'year'
     },
   }));
 
@@ -222,8 +224,14 @@ export default function MarketSimulation({ COLORS, useStyles }) {
 
   // Convenience getters/setters scoped to active mode
   const view = stateByMode[mode];
-  const { selected, edits, selectedMonthIdx, rangeStartIdx, rangeEndIdx } =
-    view;
+  const {
+    selected,
+    edits,
+    selectedMonthIdx,
+    rangeStartIdx,
+    rangeEndIdx,
+    applyScope,
+  } = view;
 
   const defs = MODES[mode];
   const activeProfiles = profilesByMode[mode];
@@ -630,7 +638,7 @@ export default function MarketSimulation({ COLORS, useStyles }) {
           time period.
         </p>
 
-        <div style={{ marginTop: 30, marginBottom: 6 }}>
+        <div style={{ marginTop: 30, marginBottom: 2 }}>
           <div style={{ color: COLORS.muted }}>Choose category</div>
         </div>
 
@@ -673,7 +681,7 @@ export default function MarketSimulation({ COLORS, useStyles }) {
 
         {/* Chips */}
         <div style={{ marginTop: 6 }}>
-          <div style={{ color: COLORS.muted, marginBottom: 6 }}>
+          <div style={{ color: COLORS.muted, marginBottom: 12 }}>
             {MODES[mode].label}: choose one or more
           </div>
 
@@ -922,20 +930,81 @@ export default function MarketSimulation({ COLORS, useStyles }) {
             marginBottom: 12,
             display: "flex",
             justifyContent: "flex-end",
-            gap: 8,
+            gap: 12,
             alignItems: "center",
           }}
         >
+          {/* Selected month label (stays on the right) */}
           {selectedMonthLabel && (
-            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ color: COLORS.muted }}>
-                Selected month:{" "}
-                <strong style={{ color: COLORS.text }}>
-                  {selectedMonthLabel}
-                </strong>
-              </span>
+            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <strong style={{ color: COLORS.text }}>
+                {selectedMonthLabel}
+              </strong>
             </span>
           )}
+
+          {/* NEW: Scope toggle — Month only vs Year avg */}
+          <div
+            role="group"
+            aria-label="Apply changes to"
+            style={{
+              display: "inline-flex",
+              border: `1px solid ${COLORS.border}`,
+              borderRadius: 10,
+              overflow: "hidden",
+              marginLeft: 6,
+            }}
+          >
+            {/* Month only */}
+            <button
+              onClick={() => updateViewField("applyScope", "month")}
+              style={{
+                padding: "6px 10px",
+                fontSize: 12,
+                cursor: "pointer",
+                background:
+                  applyScope === "month"
+                    ? isDarkHex(COLORS.panel)
+                      ? "rgba(255,255,255,0.18)"
+                      : "rgba(255,84,50,0.16)"
+                    : "transparent",
+                color: COLORS.text,
+                border: "none",
+                borderRight: `1px solid ${COLORS.border}`,
+                transition: "background-color 120ms ease",
+              }}
+              title="Apply card changes only to the chosen month"
+            >
+              Month only
+            </button>
+
+            {/* Year avg (label shows the year of the selected month if present) */}
+            <button
+              onClick={() => updateViewField("applyScope", "year")}
+              style={{
+                padding: "6px 10px",
+                fontSize: 12,
+                cursor: "pointer",
+                background:
+                  applyScope === "year"
+                    ? isDarkHex(COLORS.panel)
+                      ? "rgba(255,255,255,0.18)"
+                      : "rgba(255,84,50,0.16)"
+                    : "transparent",
+                color: COLORS.text,
+                border: "none",
+                transition: "background-color 120ms ease",
+              }}
+              title="Apply card changes as a calendar-year average"
+            >
+              {(() => {
+                if (selectedMonthIdx == null) return "Total Year";
+                const ym = monthTicks[selectedMonthIdx] || "";
+                const year = ym.split("-")[0] || "";
+                return `Total Year ${year}`;
+              })()}
+            </button>
+          </div>
         </div>
 
         <div
