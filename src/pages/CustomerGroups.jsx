@@ -282,9 +282,14 @@ export default function CustomerGroups({ COLORS, useStyles }) {
           gap: 10,
         }}
       >
-        <h1 style={{ ...styles.h1, margin: 0, color: "#FF5432" }}>
-          Customer Groups
+        <h1 style={{ ...styles.h1, margin: 0 }}>
+          <span
+            style={{ color: COLORS.accent, transition: "color 120ms ease" }}
+          >
+            Customer Groups
+          </span>
         </h1>
+
         <p style={{ color: COLORS.muted, fontSize: 20, margin: 0 }}>
           Explore customer clusters. Hover points for details, click to focus a
           cluster.

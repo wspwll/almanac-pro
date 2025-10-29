@@ -305,9 +305,14 @@ export default function ProductSentiments({ COLORS, useStyles }) {
           gap: 10,
         }}
       >
-        <h1 style={{ ...styles.h1, margin: 0, color: "#FF5432" }}>
-          Product Sentiments
+        <h1 style={{ ...styles.h1, margin: 0 }}>
+          <span
+            style={{ color: COLORS.accent, transition: "color 120ms ease" }}
+          >
+            Product Sentiments
+          </span>
         </h1>
+
         <p style={{ color: COLORS.muted, margin: 0 }}>
           Compare how customers feel about their vehicle purchase. Drill from
           the <em>overall score</em> into <em>category</em> and{" "}

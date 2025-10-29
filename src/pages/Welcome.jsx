@@ -183,7 +183,12 @@ export default function Welcome({ COLORS, useStyles }) {
         }}
       >
         <h1 style={{ ...styles.h1, margin: 0 }}>
-          Welcome to <span style={{ color: "#FF5432" }}>Scout Almanac Pro</span>
+          Welcome to{" "}
+          <span
+            style={{ color: COLORS.accent, transition: "color 120ms ease" }}
+          >
+            Scout Almanac Pro
+          </span>
         </h1>
 
         <p style={{ color: COLORS.muted, margin: 0, fontSize: "1.3rem" }}>
@@ -257,7 +262,15 @@ export default function Welcome({ COLORS, useStyles }) {
               padding: 14,
             }}
           >
-            <strong style={{ fontSize: 22, color: "#FF5432" }}>Model</strong>
+            <strong
+              style={{
+                fontSize: 22,
+                color: COLORS.accent,
+                transition: "color 120ms ease",
+              }}
+            >
+              Model
+            </strong>
             <p style={{ color: COLORS.text, marginTop: 6, fontSize: "1em" }}>
               Use <em>Market Simulation</em> to test vehicle pricing factors,
               elasticity, and sales.
@@ -274,7 +287,15 @@ export default function Welcome({ COLORS, useStyles }) {
               padding: 14,
             }}
           >
-            <strong style={{ fontSize: 22, color: "#FF5432" }}>Compare</strong>
+            <strong
+              style={{
+                fontSize: 22,
+                color: COLORS.accent,
+                transition: "color 120ms ease",
+              }}
+            >
+              Compare
+            </strong>
             <p style={{ color: COLORS.text, marginTop: 6, fontSize: "1em" }}>
               Use <em>Customer Groups</em> to analyze the market's distinct
               customer profiles.
@@ -291,7 +312,13 @@ export default function Welcome({ COLORS, useStyles }) {
               padding: 14,
             }}
           >
-            <strong style={{ fontSize: 22, color: "#FF5432" }}>
+            <strong
+              style={{
+                fontSize: 22,
+                color: COLORS.accent,
+                transition: "color 120ms ease",
+              }}
+            >
               Understand
             </strong>
             <p style={{ color: COLORS.text, marginTop: 6, fontSize: "1em" }}>
@@ -310,7 +337,15 @@ export default function Welcome({ COLORS, useStyles }) {
               padding: 14,
             }}
           >
-            <strong style={{ fontSize: 22, color: "#FF5432" }}>Move</strong>
+            <strong
+              style={{
+                fontSize: 22,
+                color: COLORS.accent,
+                transition: "color 120ms ease",
+              }}
+            >
+              Move
+            </strong>
             <p style={{ color: COLORS.text, marginTop: 6, fontSize: "1em" }}>
               Turn insights into direction. Align your team, shape decisions,
               and move your work forward.

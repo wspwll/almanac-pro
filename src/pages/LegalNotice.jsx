@@ -49,8 +49,24 @@ export default function LegalNotice({ COLORS, useStyles }) {
     margin: "16px 0",
   };
 
+  const hexToRgb = (hex) => {
+    const h = hex.replace("#", "");
+    const full =
+      h.length === 3
+        ? h
+            .split("")
+            .map((c) => c + c)
+            .join("")
+        : h;
+    const r = parseInt(full.slice(0, 2), 16);
+    const g = parseInt(full.slice(2, 4), 16);
+    const b = parseInt(full.slice(4, 6), 16);
+    return `${r}, ${g}, ${b}`;
+  };
+
   const callout = {
-    background: "rgba(255,84,50,0.08)",
+    background: `rgba(${hexToRgb(COLORS.accent)}, 0.10)`,
+    border: `1px solid rgba(${hexToRgb(COLORS.accent)}, 0.35)`,
     padding: "12px 14px",
     borderRadius: 10,
     marginBottom: 16,
@@ -70,8 +86,13 @@ export default function LegalNotice({ COLORS, useStyles }) {
         }}
       >
         <h1 style={{ ...styles.h1, margin: 0 }}>
-          <span style={{ color: "#FF5432" }}>Legal Notice</span>
+          <span
+            style={{ color: COLORS.accent, transition: "color 120ms ease" }}
+          >
+            Legal Notice
+          </span>
         </h1>
+
         <p style={{ ...small, margin: 0 }}>Last updated: October 25, 2025</p>
       </div>
 
@@ -88,7 +109,11 @@ export default function LegalNotice({ COLORS, useStyles }) {
           }}
         >
           CONFIDENTIAL —{" "}
-          <span style={{ color: "#FF5432" }}>FOR INTERNAL USE ONLY</span>
+          <span
+            style={{ color: COLORS.accent, transition: "color 120ms ease" }}
+          >
+            FOR INTERNAL USE ONLY
+          </span>
         </div>
 
         <div style={divider} />

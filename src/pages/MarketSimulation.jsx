@@ -470,6 +470,15 @@ export default function MarketSimulation({ COLORS, useStyles }) {
     gap: 10,
   };
 
+  // --- Neutral tokens for mode toggle (no brand hue) ---
+  const isDark = isDarkHex(COLORS.panel);
+  const TOGGLE_ACTIVE_BORDER = isDark ? "#FFFFFF" : "#11232F"; // dark: white, light: Scout deep navy
+  const TOGGLE_ACTIVE_BG = isDark
+    ? "rgba(255,255,255,0.22)"
+    : "rgba(17,35,47,0.10)";
+  const TOGGLE_IDLE_BORDER = COLORS.border;
+  const TOGGLE_TEXT = COLORS.text;
+
   const label = { color: "#FFFFF", fontSize: 12 };
   const inputRow = {
     display: "grid",
@@ -622,9 +631,17 @@ export default function MarketSimulation({ COLORS, useStyles }) {
     <div>
       {/* Header */}
       <div style={topWrap}>
-        <h1 style={{ ...styles.h1, margin: 0, color: "#FF5432" }}>
+        <h1
+          style={{
+            ...styles.h1,
+            margin: 0,
+            color: COLORS.accent,
+            transition: "color 120ms ease",
+          }}
+        >
           Market Simulation
         </h1>
+
         <p
           style={{
             color: COLORS.muted,
@@ -642,42 +659,58 @@ export default function MarketSimulation({ COLORS, useStyles }) {
           <div style={{ color: COLORS.muted }}>Choose category</div>
         </div>
 
-        <div
-          style={{ display: "flex", gap: 8, marginTop: 0, marginBottom: 20 }}
-        >
-          {[
-            { id: "segments", label: "Segments" },
-            { id: "powertrains", label: "Powertrains" },
-          ].map((m) => (
-            <button
-              key={m.id}
-              onClick={() => switchMode(m.id)}
+        {(() => {
+          const isDark = isDarkHex(COLORS.panel);
+          const neutralAccent = isDark
+            ? "#FFFFFF"
+            : shiftHexLightness(COLORS.accent, -0.28); // darker accent on light panels
+          const activeBg = isDark
+            ? "rgba(255,255,255,0.22)"
+            : `rgba(${hexToRgb(neutralAccent)}, 0.12)`;
+          const activeBorder = isDark
+            ? "1px solid #FFFFFF"
+            : `1px solid ${neutralAccent}`;
+
+          return (
+            <div
               style={{
-                padding: "8px 12px",
-                borderRadius: 10,
-                border:
-                  mode === m.id
-                    ? isDarkHex(COLORS.panel)
-                      ? "1px solid #FFFFFF"
-                      : "1px solid #FF5432"
-                    : `1px solid ${COLORS.border}`,
-                background:
-                  mode === m.id
-                    ? isDarkHex(COLORS.panel)
-                      ? "rgba(255,255,255,0.22)"
-                      : "rgba(255,84,50,0.18)"
-                    : "transparent",
-                fontSize: 16,
-                color: COLORS.text,
-                cursor: "pointer",
-                transition:
-                  "background-color 120ms ease, border-color 120ms ease",
+                display: "flex",
+                gap: 8,
+                marginTop: 0,
+                marginBottom: 20,
               }}
             >
-              {m.label}
-            </button>
-          ))}
-        </div>
+              {[
+                { id: "segments", label: "Segments" },
+                { id: "powertrains", label: "Powertrains" },
+              ].map((m) => {
+                const isActive = mode === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() => switchMode(m.id)}
+                    style={{
+                      padding: "8px 12px",
+                      borderRadius: 10,
+                      border: isActive
+                        ? `1px solid ${TOGGLE_ACTIVE_BORDER}`
+                        : `1px solid ${TOGGLE_IDLE_BORDER}`,
+                      background: isActive ? TOGGLE_ACTIVE_BG : "transparent",
+                      fontSize: 16,
+                      color: TOGGLE_TEXT,
+                      cursor: "pointer",
+                      transition:
+                        "background-color 120ms ease, border-color 120ms ease",
+                    }}
+                    title={m.label}
+                  >
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })()}
 
         {/* Chips */}
         <div style={{ marginTop: 6 }}>
@@ -1070,9 +1103,7 @@ export default function MarketSimulation({ COLORS, useStyles }) {
                     marginBottom: 10,
                   }}
                 >
-                  <div style={{ color: COLORS.muted, fontSize: 16 }}>
-                    Volume
-                  </div>
+                  <div style={{ color: COLORS.text, fontSize: 16 }}>Volume</div>
                   <div style={{ fontWeight: 800, fontSize: 24 }}>
                     {fmt(r.volume, 0)}
                   </div>
