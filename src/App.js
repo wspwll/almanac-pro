@@ -283,7 +283,7 @@ function Layout({ theme, setTheme, COLORS, colorMode, setColorMode }) {
             onClick={() => setDrawerOpen((v) => !v)}
             style={styles.drawerToggle}
           >
-            <span style={{ fontWeight: 700 }}>Color Modes</span>
+            <span style={{ fontWeight: 700 }}>Themes</span>
             {drawerOpen ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
           </button>
 
@@ -321,9 +321,17 @@ function Layout({ theme, setTheme, COLORS, colorMode, setColorMode }) {
 
 /* -------------------- Color Mode Icon Button -------------------- */
 function ColorIcon({ label, icon: Icon, hex, active, onSelect, COLORS }) {
+  // tile uses its own color as a soft solid; selected stays as you have it
+  const tileBg = rgbaStringToSolidHex(hexToAlpha(hex, 0.08), COLORS.panel);
+  const activeBg = rgbaStringToSolidHex(
+    hexToAlpha(COLORS.accent, 0.12),
+    COLORS.panel
+  );
+
   const border = active
     ? `2px solid ${COLORS.accent}`
     : `1px solid ${COLORS.border}`;
+
   return (
     <button
       type="button"
@@ -335,7 +343,7 @@ function ColorIcon({ label, icon: Icon, hex, active, onSelect, COLORS }) {
         alignItems: "center",
         justifyContent: "center",
         gap: 6,
-        background: "transparent",
+        background: active ? activeBg : tileBg, // ← per-tile tint
         color: COLORS.text,
         border,
         borderRadius: 12,
@@ -353,13 +361,15 @@ function ColorIcon({ label, icon: Icon, hex, active, onSelect, COLORS }) {
 /* -------------------- Utilities -------------------- */
 function SideLink({ to, icon: Icon, label, end, COLORS }) {
   const styles = useStyles(COLORS);
+  const solidActiveBg = rgbaStringToSolidHex(COLORS.linkActiveBg, COLORS.panel);
+
   return (
     <NavLink
       to={to}
       end={end}
       style={({ isActive }) => ({
         ...styles.link,
-        background: isActive ? COLORS.linkActiveBg : "transparent",
+        background: isActive ? solidActiveBg : "transparent",
         borderColor: isActive ? COLORS.accent2 : "transparent",
       })}
     >
@@ -380,6 +390,22 @@ function NotFound({ COLORS }) {
 }
 
 function useStyles(COLORS, theme) {
+  const isDark = theme === "dark";
+
+  // Solid backgrounds that track the current accent
+  const btnBg = rgbaStringToSolidHex(
+    hexToAlpha(COLORS.accent, isDark ? 0.1 : 0.08),
+    COLORS.panel
+  );
+  const knobBgLight = rgbaStringToSolidHex(
+    hexToAlpha("#ffffff", 0.15),
+    COLORS.panel
+  );
+  const knobBgDark = rgbaStringToSolidHex(
+    hexToAlpha("#ffffff", 0.06),
+    COLORS.panel
+  );
+
   return {
     sidebar: {
       background: COLORS.panel,
@@ -389,13 +415,18 @@ function useStyles(COLORS, theme) {
       flexDirection: "column",
       height: "100vh",
       boxSizing: "border-box",
-      boxShadow:
-        theme === "dark"
-          ? "6px 0 14px rgba(0,0,0,0.3)"
-          : "4px 0 12px rgba(0,0,0,0.1)",
+      position: "relative",
+      zIndex: 2,
+      boxShadow: isDark
+        ? "8px 0 24px rgba(0,0,0,0.55), 1px 0 0 rgba(0,0,0,0.25)"
+        : "0px 0 20px rgba(0,0,0,0.25), 0px 0 0 rgba(0,0,0,0.1)",
+      ...plaidTexture(COLORS, theme),
     },
+
     sidebarSpacer: { flex: 1 },
+
     brand: { display: "flex", alignItems: "center", gap: 10, padding: "20px" },
+
     link: {
       display: "flex",
       alignItems: "center",
@@ -410,19 +441,25 @@ function useStyles(COLORS, theme) {
       fontWeight: 500,
       transition: "background 0.15s, border-color 0.15s",
     },
+
     main: {
       background: COLORS.bg,
       color: COLORS.text,
       padding: 24,
       overflowY: "auto",
+      position: "relative",
+      zIndex: 1,
     },
+
     h1: { margin: 0, fontSize: 36, color: COLORS.text },
+
+    // Daylight/Midnight toggle button (accent-tinted solid)
     themeToggle: {
       display: "flex",
       alignItems: "center",
       width: "100%",
       padding: "10px 12px",
-      background: "transparent",
+      background: btnBg,
       color: COLORS.text,
       border: `1px solid ${COLORS.border}`,
       borderRadius: 10,
@@ -432,22 +469,25 @@ function useStyles(COLORS, theme) {
       fontWeight: 600,
       marginBottom: 8,
     },
-    toggleKnob: (isDark) => ({
+
+    toggleKnob: (isDarkKnob) => ({
       width: 28,
       height: 28,
       borderRadius: 999,
       border: `1px solid ${COLORS.border}`,
-      background: isDark ? COLORS.panel : "#FFFFFF15",
+      background: isDarkKnob ? knobBgDark : knobBgLight,
       display: "grid",
       placeItems: "center",
     }),
+
+    // Themes dropdown button (accent-tinted solid)
     drawerToggle: {
       display: "flex",
       alignItems: "center",
       justifyContent: "space-between",
       width: "100%",
       padding: "10px 12px",
-      background: "transparent",
+      background: btnBg,
       color: COLORS.text,
       border: `1px solid ${COLORS.border}`,
       borderRadius: 10,
@@ -456,17 +496,18 @@ function useStyles(COLORS, theme) {
       fontSize: 14,
       fontWeight: 600,
     },
+
     drawer: {
       overflow: "hidden",
       transition:
         "max-height 0.18s ease, opacity 0.16s ease, transform 0.16s ease",
       marginTop: 8,
-      border: `1px solid ${COLORS.border}`,
+      border: "none",
       borderRadius: 12,
       padding: 12,
-      background:
-        theme === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
+      background: "transparent",
     },
+
     swatchGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
   };
 }
@@ -484,4 +525,79 @@ function hexToAlpha(hex, alpha = 0.15) {
   const g = parseInt(full.slice(2, 4), 16);
   const b = parseInt(full.slice(4, 6), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function rgbaStringToSolidHex(rgba, bgHex) {
+  // expects "rgba(r, g, b, a)"
+  const match = rgba.match(
+    /rgba?\s*\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)/
+  );
+  if (!match) return rgba; // fallback if parsing fails
+
+  const r = parseFloat(match[1]);
+  const g = parseFloat(match[2]);
+  const b = parseFloat(match[3]);
+  const a = parseFloat(match[4]);
+
+  const bg = bgHex.replace("#", "");
+  const full =
+    bg.length === 3
+      ? bg
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : bg;
+  const br = parseInt(full.slice(0, 2), 16);
+  const bgG = parseInt(full.slice(2, 4), 16);
+  const bb = parseInt(full.slice(4, 6), 16);
+
+  const outR = Math.round(r * a + br * (1 - a));
+  const outG = Math.round(g * a + bgG * (1 - a));
+  const outB = Math.round(b * a + bb * (1 - a));
+
+  return `#${[outR, outG, outB]
+    .map((v) => v.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+function plaidTexture(COLORS, theme) {
+  const isDark = theme === "dark";
+
+  // much softer opacities
+  const thin = isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.01)";
+  const thick = isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.02)";
+
+  // whisper of accent for warmth
+  const accentVeil = isDark
+    ? hexToAlpha(COLORS.accent, 0.03)
+    : hexToAlpha(COLORS.accent, 0.04);
+
+  const blend = isDark
+    ? "normal, overlay, overlay"
+    : "normal, multiply, multiply";
+
+  return {
+    backgroundColor: COLORS.panel,
+    backgroundImage: `
+      linear-gradient(${accentVeil}, ${accentVeil}),
+      repeating-linear-gradient(0deg,
+        transparent 0, transparent 6px,
+        ${thin} 6px, ${thin} 7px,
+        transparent 7px, transparent 14px,
+        ${thin} 14px, ${thin} 15px,
+        transparent 15px, transparent 30px,
+        ${thick} 30px, ${thick} 31px
+      ),
+      repeating-linear-gradient(90deg,
+        transparent 0, transparent 6px,
+        ${thin} 6px, ${thin} 7px,
+        transparent 7px, transparent 14px,
+        ${thin} 14px, ${thin} 15px,
+        transparent 15px, transparent 30px,
+        ${thick} 30px, ${thick} 31px
+      )`,
+    backgroundBlendMode: blend,
+    backgroundSize: "auto, 40px 40px, 40px 40px",
+    backgroundPosition: "0 0, 0 0, 0 0",
+  };
 }
