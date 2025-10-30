@@ -196,9 +196,24 @@ function getLogoSrc(theme, colorMode) {
 
 /* -------------------- Layout -------------------- */
 function Layout({ theme, setTheme, COLORS, colorMode, setColorMode }) {
-  const styles = useStyles(COLORS, theme);
+  // NEW: plaid on/off persisted
+  const initialPlaid = (() => {
+    const saved = window.localStorage.getItem("almanac_plaid");
+    return saved === null ? true : saved === "true";
+  })();
+
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [plaidOn, setPlaidOn] = useState(initialPlaid);
+
+  const styles = useStyles(COLORS, theme, plaidOn);
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
+  const togglePlaid = () => {
+    setPlaidOn((v) => {
+      const next = !v;
+      window.localStorage.setItem("almanac_plaid", String(next));
+      return next;
+    });
+  };
 
   return (
     <>
@@ -260,23 +275,6 @@ function Layout({ theme, setTheme, COLORS, colorMode, setColorMode }) {
 
           <div style={styles.sidebarSpacer} />
 
-          <button
-            type="button"
-            onClick={toggleTheme}
-            style={styles.themeToggle}
-          >
-            <div style={styles.toggleKnob(theme === "dark")}>
-              {theme === "dark" ? (
-                <Moon size={14} strokeWidth={1.75} />
-              ) : (
-                <Sun size={14} strokeWidth={1.75} />
-              )}
-            </div>
-            <span style={{ marginLeft: 10, fontWeight: 600 }}>
-              {theme === "dark" ? "Midnight" : "Daylight"}
-            </span>
-          </button>
-
           {/* Color Drawer Toggle */}
           <button
             type="button"
@@ -287,14 +285,55 @@ function Layout({ theme, setTheme, COLORS, colorMode, setColorMode }) {
             {drawerOpen ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
           </button>
 
+          {/* Drawer contents: Daylight/Midnight first, then Plaid, then swatches */}
           <div
             style={{
               ...styles.drawer,
-              maxHeight: drawerOpen ? 180 : 0,
+              maxHeight: drawerOpen ? 320 : 0,
               opacity: drawerOpen ? 1 : 0,
               transform: `translateY(${drawerOpen ? "0px" : "8px"})`,
             }}
           >
+            {/* Daylight / Midnight toggle */}
+            <button
+              type="button"
+              onClick={toggleTheme}
+              style={{ ...styles.themeToggle, marginBottom: 10 }}
+            >
+              <div style={styles.toggleKnob(theme === "dark")}>
+                {theme === "dark" ? (
+                  <Moon size={14} strokeWidth={1.75} />
+                ) : (
+                  <Sun size={14} strokeWidth={1.75} />
+                )}
+              </div>
+              <span style={{ marginLeft: 10, fontWeight: 600 }}>
+                {theme === "dark" ? "Midnight" : "Daylight"}
+              </span>
+            </button>
+
+            {/* NEW: Plaid On/Off toggle (now below Daylight toggle) */}
+            <button
+              type="button"
+              onClick={togglePlaid}
+              style={{ ...styles.themeToggle, marginBottom: 10 }}
+              title="Toggle plaid background"
+            >
+              <div style={styles.toggleKnob(!plaidOn)}>
+                <div
+                  style={{
+                    width: 12,
+                    height: 12,
+                    borderRadius: 999,
+                    border: `2px solid ${COLORS.border}`,
+                    background: plaidOn ? COLORS.accent : "transparent",
+                  }}
+                />
+              </div>
+              <span style={{ marginLeft: 10, fontWeight: 600 }}>Plaid</span>
+            </button>
+
+            {/* Accent color modes */}
             <div style={styles.swatchGrid}>
               {Object.values(ACCENT_MODES).map((m) => (
                 <ColorIcon
@@ -389,7 +428,7 @@ function NotFound({ COLORS }) {
   );
 }
 
-function useStyles(COLORS, theme) {
+function useStyles(COLORS, theme, plaidOn = true) {
   const isDark = theme === "dark";
 
   // Solid backgrounds that track the current accent
@@ -420,7 +459,8 @@ function useStyles(COLORS, theme) {
       boxShadow: isDark
         ? "8px 0 24px rgba(0,0,0,0.55), 1px 0 0 rgba(0,0,0,0.25)"
         : "0px 0 20px rgba(0,0,0,0.25), 0px 0 0 rgba(0,0,0,0.1)",
-      ...plaidTexture(COLORS, theme),
+      // NEW: scale plaid intensity (0 = off, 1 = normal)
+      ...plaidTexture(COLORS, theme, plaidOn ? 1 : 0),
     },
 
     sidebarSpacer: { flex: 1 },
@@ -453,7 +493,7 @@ function useStyles(COLORS, theme) {
 
     h1: { margin: 0, fontSize: 36, color: COLORS.text },
 
-    // Daylight/Midnight toggle button (accent-tinted solid)
+    // Daylight/Midnight + Plaid toggles share this style
     themeToggle: {
       display: "flex",
       alignItems: "center",
@@ -560,25 +600,38 @@ function rgbaStringToSolidHex(rgba, bgHex) {
     .join("")}`;
 }
 
-function plaidTexture(COLORS, theme) {
+function plaidTexture(COLORS, theme, intensity = 1) {
+  // intensity: 0 (off) → 1 (normal). We scale every alpha by this factor.
+  const clamp = (x, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, x));
+  const k = clamp(intensity, 0, 1);
+
   const isDark = theme === "dark";
 
-  // much softer opacities
-  const thin = isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.01)";
-  const thick = isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.02)";
+  // Base alphas
+  const thinA = isDark ? 0.1 : 0.01;
+  const thickA = isDark ? 0.2 : 0.02;
+  const accentA = isDark ? 0.03 : 0.04;
 
-  // whisper of accent for warmth
-  const accentVeil = isDark
-    ? hexToAlpha(COLORS.accent, 0.03)
-    : hexToAlpha(COLORS.accent, 0.04);
+  // Scaled alphas
+  const thin = isDark
+    ? `rgba(255,255,255,${thinA * k})`
+    : `rgba(0,0,0,${thinA * k})`;
+  const thick = isDark
+    ? `rgba(255,255,255,${thickA * k})`
+    : `rgba(0,0,0,${thickA * k})`;
+  const accentVeil = hexToAlpha(COLORS.accent, accentA * k);
 
   const blend = isDark
     ? "normal, overlay, overlay"
     : "normal, multiply, multiply";
 
+  // When intensity is 0, we still return a valid background (just no plaid lines/veil)
   return {
     backgroundColor: COLORS.panel,
-    backgroundImage: `
+    backgroundImage:
+      k === 0
+        ? "none"
+        : `
       linear-gradient(${accentVeil}, ${accentVeil}),
       repeating-linear-gradient(0deg,
         transparent 0, transparent 6px,
@@ -596,8 +649,8 @@ function plaidTexture(COLORS, theme) {
         transparent 15px, transparent 30px,
         ${thick} 30px, ${thick} 31px
       )`,
-    backgroundBlendMode: blend,
-    backgroundSize: "auto, 40px 40px, 40px 40px",
+    backgroundBlendMode: k === 0 ? "normal" : blend,
+    backgroundSize: k === 0 ? "auto" : "auto, 40px 40px, 40px 40px",
     backgroundPosition: "0 0, 0 0, 0 0",
   };
 }
