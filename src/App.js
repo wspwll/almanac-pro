@@ -185,6 +185,20 @@ function getLogoSrc(theme, colorMode) {
   }
 }
 
+function getCollapsedIconSrc(colorMode) {
+  switch (colorMode) {
+    case "pacific":
+      return "/scout-circle-mist.png";
+    case "silo":
+      return "/scout-circle-silo.png";
+    case "terra":
+      return "/scout-circle-terra.png";
+    case "harvester":
+    default:
+      return "/scout-circle-harvest.png";
+  }
+}
+
 /* -------------------- Layout -------------------- */
 function Layout({ theme, setTheme, COLORS, colorMode, setColorMode }) {
   const initialPlaid = (() => {
@@ -250,26 +264,22 @@ function Layout({ theme, setTheme, COLORS, colorMode, setColorMode }) {
       >
         <aside style={styles.sidebar}>
           <div style={styles.brandRow}>
-            <div style={styles.brand}>
-              <img
-                src={getLogoSrc(theme, colorMode)}
-                alt="Scout Logo"
-                style={styles.brandLogo(collapsed)}
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={toggleCollapsed}
-              title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              style={styles.collapseBtn(collapsed)} // ← pass collapsed here
-            >
+            <div style={styles.brand(collapsed)}>
               {collapsed ? (
-                <ChevronRight size={16} strokeWidth={2} />
+                <img
+                  src={getCollapsedIconSrc(colorMode)}
+                  alt="Scout Icon"
+                  title="Expand sidebar"
+                  style={styles.brandIcon}
+                />
               ) : (
-                <ChevronLeft size={16} strokeWidth={2} />
+                <img
+                  src={getLogoSrc(theme, colorMode)}
+                  alt="Scout Logo"
+                  style={styles.brandLogoFull}
+                />
               )}
-            </button>
+            </div>
           </div>
 
           {/* Nav */}
@@ -314,6 +324,7 @@ function Layout({ theme, setTheme, COLORS, colorMode, setColorMode }) {
 
           <div style={styles.sidebarSpacer} />
 
+          {/* Theme drawer (hidden when collapsed) */}
           {!collapsed && (
             <>
               <button
@@ -390,6 +401,22 @@ function Layout({ theme, setTheme, COLORS, colorMode, setColorMode }) {
               </div>
             </>
           )}
+
+          {/* Bottom collapse/expand button — hide when drawer is open to avoid overlap */}
+          {(collapsed || !drawerOpen) && (
+            <button
+              type="button"
+              onClick={toggleCollapsed}
+              title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              style={styles.collapseBtnBottom(collapsed)}
+            >
+              {collapsed ? (
+                <ChevronRight size={16} strokeWidth={2} />
+              ) : (
+                <ChevronLeft size={16} strokeWidth={2} />
+              )}
+            </button>
+          )}
         </aside>
 
         <main style={styles.main}>
@@ -441,7 +468,7 @@ function ColorIcon({ label, icon: Icon, hex, active, onSelect, COLORS }) {
 function HoverTip({ text, anchorRect, COLORS }) {
   if (!anchorRect) return null;
   const top = anchorRect.top + anchorRect.height / 2;
-  const left = anchorRect.right + 8; // 8px away from sidebar edge
+  const left = anchorRect.right + 8;
 
   return (
     <div
@@ -500,7 +527,7 @@ function SideLink({ to, icon: Icon, label, end, COLORS, collapsed }) {
         ref={linkRef}
         to={to}
         end={end}
-        title={collapsed ? label : undefined} // still keep native title as fallback
+        title={collapsed ? label : undefined}
         aria-label={label}
         onMouseEnter={handleEnter}
         onMouseLeave={handleLeave}
@@ -521,7 +548,6 @@ function SideLink({ to, icon: Icon, label, end, COLORS, collapsed }) {
         <span style={styles.linkLabel(collapsed)}>{label}</span>
       </NavLink>
 
-      {/* Tooltip when collapsed */}
       {collapsed && isHover && (
         <HoverTip text={label} anchorRect={rect} COLORS={COLORS} />
       )}
@@ -559,14 +585,14 @@ function useStyles(COLORS, theme, plaidOn = true, collapsed = false) {
     sidebar: {
       background: COLORS.panel,
       color: COLORS.text,
-      padding: "16px 16px 24px", // fixed to keep vertical origin steady
+      padding: "16px 16px 24px",
       display: "flex",
       flexDirection: "column",
       height: "100vh",
       boxSizing: "border-box",
       position: "relative",
       zIndex: 2,
-      overflow: "hidden", // ensure button/contents don't spill during width anim
+      overflow: "hidden",
       boxShadow: isDark
         ? "8px 0 24px rgba(0,0,0,0.55), 1px 0 0 rgba(0,0,0,0.25)"
         : "0px 0 20px rgba(0,0,0,0.25), 0px 0 0 rgba(0,0,0,0.1)",
@@ -585,45 +611,84 @@ function useStyles(COLORS, theme, plaidOn = true, collapsed = false) {
       position: "relative",
       alignItems: "center",
       gap: 8,
-      minHeight: 72, // fixed header band so nav start never moves
+      minHeight: 72,
       marginBottom: 12,
     },
 
-    brand: {
-      display: "flex",
+    brand: (collapsed) => ({
+      display: collapsed ? "grid" : "flex",
+      placeItems: collapsed ? "center" : "unset",
       alignItems: "center",
       gap: 10,
-      padding: "20px 12px 8px 12px", // fixed padding; no state changes
-      justifyContent: "flex-start",
+      padding: collapsed ? "20px 0 8px 0" : "20px 12px 8px 12px",
+      justifyContent: collapsed ? "center" : "flex-start",
       minHeight: 36,
-    },
-
-    brandLogo: (collapsed) => ({
-      height: 36,
-      width: "auto",
-      opacity: collapsed ? 0 : 1,
-      transform: `translateX(${collapsed ? "-8px" : "0"})`,
-      transition: "opacity 520ms ease, transform 520ms ease",
-      pointerEvents: collapsed ? "none" : "auto",
+      width: "100%",
     }),
 
-    collapseBtn: (collapsed) => ({
+    // New: full-size logo (expanded)
+    brandLogoFull: {
+      height: 36,
+      width: "auto",
+      opacity: 1,
+      transform: "translateX(0)",
+      transition: "opacity 520ms ease, transform 520ms ease",
+      pointerEvents: "auto",
+    },
+
+    brandIcon: {
+      width: 32,
+      height: 32,
+      objectFit: "contain",
+      display: "block",
+      margin: "0 auto",
+    },
+
+    // Small centered toggle visible only in collapsed state (top of sidebar)
+    collapseBtnCollapsed: {
       position: "absolute",
       top: 12,
-      ...(collapsed
-        ? { left: "50%", transform: "translateX(-50%)" } // center when collapsed
-        : { right: 12, transform: "none" }), // right when expanded
+      left: "50%",
+      transform: "translateX(-50%)",
       display: "grid",
       placeItems: "center",
       width: 32,
       height: 32,
       borderRadius: 8,
-      background: btnBg,
+      background: rgbaStringToSolidHex(
+        hexToAlpha(COLORS.accent, 0.1),
+        COLORS.panel
+      ),
       color: COLORS.text,
       border: `1px solid ${COLORS.border}`,
       cursor: "pointer",
       transition:
-        "left 320ms ease, right 320ms ease, transform 320ms ease, background-color 320ms ease, border-color 320ms ease",
+        "background-color 320ms ease, border-color 320ms ease, transform 320ms ease",
+      zIndex: 3,
+    },
+
+    // Bottom button pinned to bottom in both states
+    collapseBtnBottom: (isCollapsed) => ({
+      position: "absolute",
+      bottom: 12,
+      // center when collapsed, align left when expanded
+      left: isCollapsed ? "50%" : 12,
+      transform: isCollapsed ? "translateX(-50%)" : "none",
+      display: "grid",
+      placeItems: "center",
+      width: 36,
+      height: 36,
+      borderRadius: 10,
+      background: rgbaStringToSolidHex(
+        hexToAlpha(COLORS.accent, 0.1),
+        COLORS.panel
+      ),
+      color: COLORS.text,
+      border: `1px solid ${COLORS.border}`,
+      cursor: "pointer",
+      transition:
+        "background-color 320ms ease, border-color 320ms ease, transform 320ms ease, left 520ms cubic-bezier(.22,.61,.17,.99)",
+      zIndex: 3,
     }),
 
     link: {
@@ -661,16 +726,16 @@ function useStyles(COLORS, theme, plaidOn = true, collapsed = false) {
     linkIcon: {
       width: 18,
       height: 18,
-      minWidth: 18, // ← prevents shrink to dots
+      minWidth: 18,
       minHeight: 18,
-      flex: "0 0 18px", // ← fixed slot for the icon
+      flex: "0 0 18px",
       display: "grid",
       placeItems: "center",
     },
 
     linkLabel: (collapsed) => ({
-      flex: "1 1 auto", // ← label can shrink
-      minWidth: 0, // ← allow text to actually shrink/clip
+      flex: "1 1 auto",
+      minWidth: 0,
       whiteSpace: "nowrap",
       opacity: collapsed ? 0 : 1,
       transform: `translateX(${collapsed ? "-6px" : "0"})`,
@@ -771,11 +836,10 @@ function hexToAlpha(hex, alpha = 0.15) {
 }
 
 function rgbaStringToSolidHex(rgba, bgHex) {
-  // expects "rgba(r, g, b, a)"
   const match = rgba.match(
     /rgba?\s*\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)/
   );
-  if (!match) return rgba; // fallback if parsing fails
+  if (!match) return rgba;
 
   const r = parseFloat(match[1]);
   const g = parseFloat(match[2]);
@@ -795,7 +859,7 @@ function rgbaStringToSolidHex(rgba, bgHex) {
   const bb = parseInt(full.slice(4, 6), 16);
 
   const outR = Math.round(r * a + br * (1 - a));
-  const outG = Math.round(g * a + bgG * (1 - a)); // ← fixed: added *
+  const outG = Math.round(g * a + bgG * (1 - a));
   const outB = Math.round(b * a + bb * (1 - a));
 
   return `#${[outR, outG, outB]
@@ -806,7 +870,6 @@ function rgbaStringToSolidHex(rgba, bgHex) {
 function plaidTexture(COLORS, theme, intensity = 1) {
   const clamp = (x, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, x));
   const k = clamp(intensity, 0, 1);
-
   const isDark = theme === "dark";
 
   const thinA = isDark ? 0.1 : 0.01;
