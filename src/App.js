@@ -20,6 +20,8 @@ import {
   Warehouse,
   ChevronUp,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 
 /* -------------------- Lazy-loaded pages -------------------- */
@@ -63,24 +65,14 @@ const ACCENT_MODES = {
     hex: "#FF5432",
     icon: Tractor,
   },
-  terra: {
-    key: "terra",
-    label: "Terra",
-    hex: "#2E4E61",
-    icon: Mountain,
-  },
+  terra: { key: "terra", label: "Terra", hex: "#2E4E61", icon: Mountain },
   pacific: {
     key: "pacific",
     label: "Pacific Mist",
     hex: "#7AA5C9",
     icon: Waves,
   },
-  silo: {
-    key: "silo",
-    label: "Silo",
-    hex: "#788B61",
-    icon: Warehouse,
-  },
+  silo: { key: "silo", label: "Silo", hex: "#788B61", icon: Warehouse },
 };
 
 /* -------------------- Root App -------------------- */
@@ -187,7 +179,6 @@ function getLogoSrc(theme, colorMode) {
       return dark
         ? "/almanac-pro-terra-fog.png"
         : "/almanac-pro-terra-moonstone.png";
-    // Keep Harvester behavior exactly as you have it now:
     case "harvester":
     default:
       return dark ? "/almanac-pro-fog.png" : "/almanac-pro-logo-moonstone.png";
@@ -196,21 +187,34 @@ function getLogoSrc(theme, colorMode) {
 
 /* -------------------- Layout -------------------- */
 function Layout({ theme, setTheme, COLORS, colorMode, setColorMode }) {
-  // NEW: plaid on/off persisted
   const initialPlaid = (() => {
     const saved = window.localStorage.getItem("almanac_plaid");
     return saved === null ? true : saved === "true";
   })();
 
+  const initialCollapsed = (() => {
+    const saved = window.localStorage.getItem("almanac_sidebar_collapsed");
+    return saved === "true";
+  })();
+
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [plaidOn, setPlaidOn] = useState(initialPlaid);
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
 
-  const styles = useStyles(COLORS, theme, plaidOn);
+  const styles = useStyles(COLORS, theme, plaidOn, collapsed);
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
   const togglePlaid = () => {
     setPlaidOn((v) => {
       const next = !v;
       window.localStorage.setItem("almanac_plaid", String(next));
+      return next;
+    });
+  };
+  const toggleCollapsed = () => {
+    setCollapsed((v) => {
+      const next = !v;
+      window.localStorage.setItem("almanac_sidebar_collapsed", String(next));
+      if (next) setDrawerOpen(false);
       return next;
     });
   };
@@ -225,129 +229,167 @@ function Layout({ theme, setTheme, COLORS, colorMode, setColorMode }) {
           margin: 0;
           font-family: Barlow, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
         }
+        @media (prefers-reduced-motion: reduce) {
+          * {
+            transition-duration: 0.001ms !important;
+            animation-duration: 0.001ms !important;
+            animation-iteration-count: 1 !important;
+            scroll-behavior: auto !important;
+          }
+        }
       `}</style>
 
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "270px 1fr",
+          gridTemplateColumns: "auto 1fr",
           height: "100vh",
           background: COLORS.bg,
           color: COLORS.text,
         }}
       >
         <aside style={styles.sidebar}>
-          <div style={styles.brand}>
-            <img
-              src={getLogoSrc(theme, colorMode)}
-              alt="Scout Logo"
-              style={{ height: 36, width: "auto" }}
-            />
+          <div style={styles.brandRow}>
+            <div style={styles.brand}>
+              <img
+                src={getLogoSrc(theme, colorMode)}
+                alt="Scout Logo"
+                style={styles.brandLogo(collapsed)}
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={toggleCollapsed}
+              title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              style={styles.collapseBtn(collapsed)} // ← pass collapsed here
+            >
+              {collapsed ? (
+                <ChevronRight size={16} strokeWidth={2} />
+              ) : (
+                <ChevronLeft size={16} strokeWidth={2} />
+              )}
+            </button>
           </div>
 
+          {/* Nav */}
           <nav style={{ marginTop: -5 }}>
-            <SideLink COLORS={COLORS} to="/" icon={Home} label="Welcome" end />
+            <SideLink
+              COLORS={COLORS}
+              to="/"
+              icon={Home}
+              label="Welcome"
+              end
+              collapsed={collapsed}
+            />
             <SideLink
               COLORS={COLORS}
               to="/market-simulation"
               icon={Activity}
               label="Market Simulation"
+              collapsed={collapsed}
             />
             <SideLink
               COLORS={COLORS}
               to="/customer-groups"
               icon={Users}
               label="Customer Groups"
+              collapsed={collapsed}
             />
             <SideLink
               COLORS={COLORS}
               to="/product-sentiments"
               icon={MessageSquare}
               label="Product Sentiments"
+              collapsed={collapsed}
             />
             <SideLink
               COLORS={COLORS}
               to="/legal-notice"
               icon={Scale}
               label="Legal Notice"
+              collapsed={collapsed}
             />
           </nav>
 
           <div style={styles.sidebarSpacer} />
 
-          {/* Color Drawer Toggle */}
-          <button
-            type="button"
-            onClick={() => setDrawerOpen((v) => !v)}
-            style={styles.drawerToggle}
-          >
-            <span style={{ fontWeight: 700 }}>Themes</span>
-            {drawerOpen ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
-          </button>
-
-          {/* Drawer contents: Daylight/Midnight first, then Plaid, then swatches */}
-          <div
-            style={{
-              ...styles.drawer,
-              maxHeight: drawerOpen ? 320 : 0,
-              opacity: drawerOpen ? 1 : 0,
-              transform: `translateY(${drawerOpen ? "0px" : "8px"})`,
-            }}
-          >
-            {/* Daylight / Midnight toggle */}
-            <button
-              type="button"
-              onClick={toggleTheme}
-              style={{ ...styles.themeToggle, marginBottom: 10 }}
-            >
-              <div style={styles.toggleKnob(theme === "dark")}>
-                {theme === "dark" ? (
-                  <Moon size={14} strokeWidth={1.75} />
+          {!collapsed && (
+            <>
+              <button
+                type="button"
+                onClick={() => setDrawerOpen((v) => !v)}
+                style={styles.drawerToggle}
+              >
+                <span style={{ fontWeight: 700 }}>Themes</span>
+                {drawerOpen ? (
+                  <ChevronDown size={16} />
                 ) : (
-                  <Sun size={14} strokeWidth={1.75} />
+                  <ChevronUp size={16} />
                 )}
-              </div>
-              <span style={{ marginLeft: 10, fontWeight: 600 }}>
-                {theme === "dark" ? "Midnight" : "Daylight"}
-              </span>
-            </button>
+              </button>
 
-            {/* NEW: Plaid On/Off toggle (now below Daylight toggle) */}
-            <button
-              type="button"
-              onClick={togglePlaid}
-              style={{ ...styles.themeToggle, marginBottom: 10 }}
-              title="Toggle plaid background"
-            >
-              <div style={styles.toggleKnob(!plaidOn)}>
-                <div
-                  style={{
-                    width: 12,
-                    height: 12,
-                    borderRadius: 999,
-                    border: `2px solid ${COLORS.border}`,
-                    background: plaidOn ? COLORS.accent : "transparent",
-                  }}
-                />
-              </div>
-              <span style={{ marginLeft: 10, fontWeight: 600 }}>Plaid</span>
-            </button>
+              <div
+                style={{
+                  ...styles.drawer,
+                  maxHeight: drawerOpen ? 320 : 0,
+                  opacity: drawerOpen ? 1 : 0,
+                  transform: `translateY(${drawerOpen ? "0px" : "8px"})`,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={toggleTheme}
+                  style={{ ...styles.themeToggle, marginBottom: 10 }}
+                >
+                  <div style={styles.toggleKnob(theme === "dark")}>
+                    {theme === "dark" ? (
+                      <Moon size={14} strokeWidth={1.75} />
+                    ) : (
+                      <Sun size={14} strokeWidth={1.75} />
+                    )}
+                  </div>
+                  <span style={{ marginLeft: 10, fontWeight: 600 }}>
+                    {theme === "dark" ? "Midnight" : "Daylight"}
+                  </span>
+                </button>
 
-            {/* Accent color modes */}
-            <div style={styles.swatchGrid}>
-              {Object.values(ACCENT_MODES).map((m) => (
-                <ColorIcon
-                  key={m.key}
-                  label={m.label}
-                  icon={m.icon}
-                  hex={m.hex}
-                  active={colorMode === m.key}
-                  onSelect={() => setColorMode(m.key)}
-                  COLORS={COLORS}
-                />
-              ))}
-            </div>
-          </div>
+                <button
+                  type="button"
+                  onClick={togglePlaid}
+                  style={{ ...styles.themeToggle, marginBottom: 10 }}
+                  title="Toggle plaid background"
+                >
+                  <div style={styles.toggleKnob(!plaidOn)}>
+                    <div
+                      style={{
+                        width: 12,
+                        height: 12,
+                        borderRadius: 999,
+                        border: `2px solid ${COLORS.border}`,
+                        background: plaidOn ? COLORS.accent : "transparent",
+                      }}
+                    />
+                  </div>
+                  <span style={{ marginLeft: 10, fontWeight: 600 }}>Plaid</span>
+                </button>
+
+                <div style={styles.swatchGrid}>
+                  {Object.values(ACCENT_MODES).map((m) => (
+                    <ColorIcon
+                      key={m.key}
+                      label={m.label}
+                      icon={m.icon}
+                      hex={m.hex}
+                      active={colorMode === m.key}
+                      onSelect={() => setColorMode(m.key)}
+                      COLORS={COLORS}
+                    />
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
         </aside>
 
         <main style={styles.main}>
@@ -360,7 +402,6 @@ function Layout({ theme, setTheme, COLORS, colorMode, setColorMode }) {
 
 /* -------------------- Color Mode Icon Button -------------------- */
 function ColorIcon({ label, icon: Icon, hex, active, onSelect, COLORS }) {
-  // tile uses its own color as a soft solid; selected stays as you have it
   const tileBg = rgbaStringToSolidHex(hexToAlpha(hex, 0.08), COLORS.panel);
   const activeBg = rgbaStringToSolidHex(
     hexToAlpha(COLORS.accent, 0.12),
@@ -382,13 +423,13 @@ function ColorIcon({ label, icon: Icon, hex, active, onSelect, COLORS }) {
         alignItems: "center",
         justifyContent: "center",
         gap: 6,
-        background: active ? activeBg : tileBg, // ← per-tile tint
+        background: active ? activeBg : tileBg,
         color: COLORS.text,
         border,
         borderRadius: 12,
         padding: 10,
         cursor: "pointer",
-        transition: "border-color 0.15s ease, transform 0.15s ease",
+        transition: "border-color 360ms ease, transform 360ms ease",
       }}
     >
       <Icon size={26} color={hex} strokeWidth={1.8} />
@@ -397,24 +438,94 @@ function ColorIcon({ label, icon: Icon, hex, active, onSelect, COLORS }) {
   );
 }
 
-/* -------------------- Utilities -------------------- */
-function SideLink({ to, icon: Icon, label, end, COLORS }) {
-  const styles = useStyles(COLORS);
-  const solidActiveBg = rgbaStringToSolidHex(COLORS.linkActiveBg, COLORS.panel);
+function HoverTip({ text, anchorRect, COLORS }) {
+  if (!anchorRect) return null;
+  const top = anchorRect.top + anchorRect.height / 2;
+  const left = anchorRect.right + 8; // 8px away from sidebar edge
 
   return (
-    <NavLink
-      to={to}
-      end={end}
-      style={({ isActive }) => ({
-        ...styles.link,
-        background: isActive ? solidActiveBg : "transparent",
-        borderColor: isActive ? COLORS.accent2 : "transparent",
-      })}
+    <div
+      style={{
+        position: "fixed",
+        top,
+        left,
+        transform: "translateY(-50%)",
+        background: COLORS.panel,
+        color: COLORS.text,
+        border: `1px solid ${COLORS.border}`,
+        borderRadius: 8,
+        padding: "6px 10px",
+        fontSize: 13,
+        fontWeight: 600,
+        boxShadow:
+          "0 6px 18px rgba(0,0,0,0.25), 0 1px 0 rgba(0,0,0,0.08) inset",
+        zIndex: 9999,
+        pointerEvents: "none",
+        opacity: 0.98,
+        transition: "opacity 120ms ease, transform 160ms ease",
+        whiteSpace: "nowrap",
+      }}
+      role="tooltip"
     >
-      <Icon size={18} />
-      <span>{label}</span>
-    </NavLink>
+      {text}
+    </div>
+  );
+}
+
+/* -------------------- Utilities -------------------- */
+function SideLink({ to, icon: Icon, label, end, COLORS, collapsed }) {
+  const styles = useStyles(COLORS, undefined, undefined, collapsed);
+  const solidActiveBg = rgbaStringToSolidHex(COLORS.linkActiveBg, COLORS.panel);
+  const hoverBg = rgbaStringToSolidHex(
+    hexToAlpha(COLORS.accent, 0.08),
+    COLORS.panel
+  );
+
+  const [isHover, setIsHover] = useState(false);
+  const [rect, setRect] = useState(null);
+  const linkRef = React.useRef(null);
+
+  const handleEnter = () => {
+    setIsHover(true);
+    if (linkRef.current) setRect(linkRef.current.getBoundingClientRect());
+  };
+  const handleLeave = () => {
+    setIsHover(false);
+    setRect(null);
+  };
+
+  return (
+    <>
+      <NavLink
+        ref={linkRef}
+        to={to}
+        end={end}
+        title={collapsed ? label : undefined} // still keep native title as fallback
+        aria-label={label}
+        onMouseEnter={handleEnter}
+        onMouseLeave={handleLeave}
+        style={({ isActive }) => ({
+          ...styles.link,
+          background: isActive
+            ? solidActiveBg
+            : isHover
+            ? hoverBg
+            : "transparent",
+          borderColor: isActive ? COLORS.accent2 : "transparent",
+          justifyContent: collapsed ? "center" : "flex-start",
+        })}
+      >
+        <span style={styles.linkIcon}>
+          <Icon size={18} style={{ width: 18, height: 18, flex: "0 0 auto" }} />
+        </span>
+        <span style={styles.linkLabel(collapsed)}>{label}</span>
+      </NavLink>
+
+      {/* Tooltip when collapsed */}
+      {collapsed && isHover && (
+        <HoverTip text={label} anchorRect={rect} COLORS={COLORS} />
+      )}
+    </>
   );
 }
 
@@ -428,10 +539,9 @@ function NotFound({ COLORS }) {
   );
 }
 
-function useStyles(COLORS, theme, plaidOn = true) {
+function useStyles(COLORS, theme, plaidOn = true, collapsed = false) {
   const isDark = theme === "dark";
 
-  // Solid backgrounds that track the current accent
   const btnBg = rgbaStringToSolidHex(
     hexToAlpha(COLORS.accent, isDark ? 0.1 : 0.08),
     COLORS.panel
@@ -449,38 +559,126 @@ function useStyles(COLORS, theme, plaidOn = true) {
     sidebar: {
       background: COLORS.panel,
       color: COLORS.text,
-      padding: "16px 16px 24px",
+      padding: "16px 16px 24px", // fixed to keep vertical origin steady
       display: "flex",
       flexDirection: "column",
       height: "100vh",
       boxSizing: "border-box",
       position: "relative",
       zIndex: 2,
+      overflow: "hidden", // ensure button/contents don't spill during width anim
       boxShadow: isDark
         ? "8px 0 24px rgba(0,0,0,0.55), 1px 0 0 rgba(0,0,0,0.25)"
         : "0px 0 20px rgba(0,0,0,0.25), 0px 0 0 rgba(0,0,0,0.1)",
-      // NEW: scale plaid intensity (0 = off, 1 = normal)
       ...plaidTexture(COLORS, theme, plaidOn ? 1 : 0),
+
+      width: collapsed ? 88 : 270,
+      transition: "width 520ms cubic-bezier(.22,.61,.17,.99)",
+      willChange: "width",
     },
 
     sidebarSpacer: { flex: 1 },
 
-    brand: { display: "flex", alignItems: "center", gap: 10, padding: "20px" },
+    brandRow: {
+      display: "grid",
+      gridTemplateColumns: "1fr",
+      position: "relative",
+      alignItems: "center",
+      gap: 8,
+      minHeight: 72, // fixed header band so nav start never moves
+      marginBottom: 12,
+    },
+
+    brand: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      padding: "20px 12px 8px 12px", // fixed padding; no state changes
+      justifyContent: "flex-start",
+      minHeight: 36,
+    },
+
+    brandLogo: (collapsed) => ({
+      height: 36,
+      width: "auto",
+      opacity: collapsed ? 0 : 1,
+      transform: `translateX(${collapsed ? "-8px" : "0"})`,
+      transition: "opacity 520ms ease, transform 520ms ease",
+      pointerEvents: collapsed ? "none" : "auto",
+    }),
+
+    collapseBtn: (collapsed) => ({
+      position: "absolute",
+      top: 12,
+      ...(collapsed
+        ? { left: "50%", transform: "translateX(-50%)" } // center when collapsed
+        : { right: 12, transform: "none" }), // right when expanded
+      display: "grid",
+      placeItems: "center",
+      width: 32,
+      height: 32,
+      borderRadius: 8,
+      background: btnBg,
+      color: COLORS.text,
+      border: `1px solid ${COLORS.border}`,
+      cursor: "pointer",
+      transition:
+        "left 320ms ease, right 320ms ease, transform 320ms ease, background-color 320ms ease, border-color 320ms ease",
+    }),
 
     link: {
       display: "flex",
       alignItems: "center",
+      flexWrap: "nowrap",
       gap: 10,
       borderLeft: "3px solid transparent",
-      padding: "14px 12px",
+      padding: "0 12px",
+      minHeight: 44,
       borderRadius: 8,
       color: COLORS.text,
       textDecoration: "none",
       margin: "12px 0",
       fontSize: 16,
       fontWeight: 500,
-      transition: "background 0.15s, border-color 0.15s",
+      width: "100%",
+      boxSizing: "border-box",
+      maxWidth: "100%",
+      overflow: "hidden",
+      transition: [
+        "background-color 240ms ease",
+        "border-color 240ms ease",
+        "color 240ms ease",
+      ].join(", "),
+      ":hover": {
+        background: rgbaStringToSolidHex(
+          hexToAlpha(COLORS.accent, 0.08),
+          COLORS.panel
+        ),
+        color: COLORS.text,
+      },
     },
+
+    linkIcon: {
+      width: 18,
+      height: 18,
+      minWidth: 18, // ← prevents shrink to dots
+      minHeight: 18,
+      flex: "0 0 18px", // ← fixed slot for the icon
+      display: "grid",
+      placeItems: "center",
+    },
+
+    linkLabel: (collapsed) => ({
+      flex: "1 1 auto", // ← label can shrink
+      minWidth: 0, // ← allow text to actually shrink/clip
+      whiteSpace: "nowrap",
+      opacity: collapsed ? 0 : 1,
+      transform: `translateX(${collapsed ? "-6px" : "0"})`,
+      maxWidth: collapsed ? 0 : 240,
+      transition:
+        "opacity 520ms ease, transform 520ms ease, max-width 560ms ease",
+      overflow: "hidden",
+    }),
 
     main: {
       background: COLORS.bg,
@@ -493,7 +691,6 @@ function useStyles(COLORS, theme, plaidOn = true) {
 
     h1: { margin: 0, fontSize: 36, color: COLORS.text },
 
-    // Daylight/Midnight + Plaid toggles share this style
     themeToggle: {
       display: "flex",
       alignItems: "center",
@@ -508,6 +705,7 @@ function useStyles(COLORS, theme, plaidOn = true) {
       fontSize: 16,
       fontWeight: 600,
       marginBottom: 8,
+      transition: "background-color 360ms ease, border-color 360ms ease",
     },
 
     toggleKnob: (isDarkKnob) => ({
@@ -518,9 +716,9 @@ function useStyles(COLORS, theme, plaidOn = true) {
       background: isDarkKnob ? knobBgDark : knobBgLight,
       display: "grid",
       placeItems: "center",
+      transition: "background-color 360ms ease, border-color 360ms ease",
     }),
 
-    // Themes dropdown button (accent-tinted solid)
     drawerToggle: {
       display: "flex",
       alignItems: "center",
@@ -535,12 +733,13 @@ function useStyles(COLORS, theme, plaidOn = true) {
       fontFamily: "inherit",
       fontSize: 14,
       fontWeight: 600,
+      transition: "background-color 360ms ease, border-color 360ms ease",
     },
 
     drawer: {
       overflow: "hidden",
       transition:
-        "max-height 0.18s ease, opacity 0.16s ease, transform 0.16s ease",
+        "max-height 520ms ease, opacity 420ms ease, transform 420ms ease",
       marginTop: 8,
       border: "none",
       borderRadius: 12,
@@ -548,7 +747,11 @@ function useStyles(COLORS, theme, plaidOn = true) {
       background: "transparent",
     },
 
-    swatchGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
+    swatchGrid: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10,
+    },
   };
 }
 
@@ -592,7 +795,7 @@ function rgbaStringToSolidHex(rgba, bgHex) {
   const bb = parseInt(full.slice(4, 6), 16);
 
   const outR = Math.round(r * a + br * (1 - a));
-  const outG = Math.round(g * a + bgG * (1 - a));
+  const outG = Math.round(g * a + bgG * (1 - a)); // ← fixed: added *
   const outB = Math.round(b * a + bb * (1 - a));
 
   return `#${[outR, outG, outB]
@@ -601,18 +804,15 @@ function rgbaStringToSolidHex(rgba, bgHex) {
 }
 
 function plaidTexture(COLORS, theme, intensity = 1) {
-  // intensity: 0 (off) → 1 (normal). We scale every alpha by this factor.
   const clamp = (x, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, x));
   const k = clamp(intensity, 0, 1);
 
   const isDark = theme === "dark";
 
-  // Base alphas
   const thinA = isDark ? 0.1 : 0.01;
   const thickA = isDark ? 0.2 : 0.02;
   const accentA = isDark ? 0.03 : 0.04;
 
-  // Scaled alphas
   const thin = isDark
     ? `rgba(255,255,255,${thinA * k})`
     : `rgba(0,0,0,${thinA * k})`;
@@ -625,7 +825,6 @@ function plaidTexture(COLORS, theme, intensity = 1) {
     ? "normal, overlay, overlay"
     : "normal, multiply, multiply";
 
-  // When intensity is 0, we still return a valid background (just no plaid lines/veil)
   return {
     backgroundColor: COLORS.panel,
     backgroundImage:
