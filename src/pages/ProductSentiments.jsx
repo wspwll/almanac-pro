@@ -1,6 +1,23 @@
 // src/pages/ProductSentiments.jsx
 import React, { useMemo, useState } from "react";
 
+import {
+  ResponsiveContainer,
+  ScatterChart,
+  Scatter,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  AreaChart,
+  Area,
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+} from "recharts";
+
 /**
  * Product Sentiments (rev + Demographic Filters)
  * - NEW: DemographicFilters bar above everything

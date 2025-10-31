@@ -1,1660 +1,2111 @@
-// src/pages/CustomerGroups.jsx
-import React, { useMemo, useState, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ResponsiveContainer,
+  ScatterChart,
+  Scatter,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Legend,
+  // histogram bits:
+  BarChart,
+  Bar,
+  Tooltip,
+  LineChart,
+  Line,
+  AreaChart,
+  Area,
+} from "recharts";
+import suvPoints from "./data/suv_points.json";
+import puPoints from "./data/pu_points.json";
+import demosMapping from "./data/demos-mapping.json";
+import codeToTextMapRaw from "./data/code-to-text-map.json";
+import { ComposableMap, Geographies, Geography } from "react-simple-maps";
 
-/**
- * Customer Groups — Layout v1 (+ Category/Chip selectors)
- * Row 0: Choose category + chips (mirrors Market Simulation)
- * Row 1: K-means scatter (with controls) | Radar compare
- * Row 2: Line chart (Transaction Price over Price Ranges) | Perception Map
- * Row 3: US Bubble Map (location + population)
- *
- * No external libs. All SVG.
- */
-
-const METRICS = [
-  { key: "price_sensitivity", label: "Price Sensitivity" },
-  { key: "loyalty", label: "Loyalty" },
-  { key: "engagement", label: "Engagement" },
-  { key: "spend", label: "Spend" },
-  { key: "support", label: "Support Tickets" },
-  { key: "nps", label: "NPS" },
+/* ---- Local series palette (renamed to avoid clashing with THEME.COLORS) ---- */
+const SERIES_COLORS = [
+  "#1F77B4",
+  "#FF7F0E",
+  "#2CA02C",
+  "#D62728",
+  "#9467BD",
+  "#8C564B",
+  "#E377C2",
+  "#7F7F7F",
+  "#BCBD22",
+  "#17BECF",
+  "#F97316",
+  "#14B8A6",
+  "#A855F7",
+  "#22C55E",
+  "#3B82F6",
 ];
 
-// Put this near the top of CustomerGroups.jsx (or compute from your real source)
-const demoPerceptionData = [
-  { model: "Ford Bronco", attribute: "Adventure", value: 26 },
-  { model: "Ford Bronco", attribute: "Tech-forward", value: 8 },
-  { model: "Ford Bronco", attribute: "Practical", value: 12 },
-  { model: "Toyota 4Runner", attribute: "Adventure", value: 22 },
-  { model: "Toyota 4Runner", attribute: "Practical", value: 18 },
-  { model: "Rivian R1S", attribute: "Tech-forward", value: 24 },
-  { model: "Rivian R1S", attribute: "Luxury", value: 14 },
-  { model: "Tesla Model Y", attribute: "Tech-forward", value: 30 },
-  { model: "Tesla Model Y", attribute: "Luxury", value: 12 },
-  { model: "Jeep Wrangler", attribute: "Adventure", value: 28 },
-  { model: "Jeep Wrangler", attribute: "Practical", value: 10 },
-];
+const US_TOPO = "https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json";
 
-// Distinct cluster colors (works for dark & light themes)
-const CLUSTER_COLORS = ["#FF5432", "#0CA5E1", "#8B5CF6", "#22C55E", "#F59E0B"];
+const US_STATE_ABBR_TO_NAME = {
+  AL: "Alabama",
+  AK: "Alaska",
+  AZ: "Arizona",
+  AR: "Arkansas",
+  CA: "California",
+  CO: "Colorado",
+  CT: "Connecticut",
+  DE: "Delaware",
+  FL: "Florida",
+  GA: "Georgia",
+  HI: "Hawaii",
+  ID: "Idaho",
+  IL: "Illinois",
+  IN: "Indiana",
+  IA: "Iowa",
+  KS: "Kansas",
+  KY: "Kentucky",
+  LA: "Louisiana",
+  ME: "Maine",
+  MD: "Maryland",
+  MA: "Massachusetts",
+  MI: "Michigan",
+  MN: "Minnesota",
+  MS: "Mississippi",
+  MO: "Missouri",
+  MT: "Montana",
+  NE: "Nebraska",
+  NV: "Nevada",
+  NH: "New Hampshire",
+  NJ: "New Jersey",
+  NM: "New Mexico",
+  NY: "New York",
+  NC: "North Carolina",
+  ND: "North Dakota",
+  OH: "Ohio",
+  OK: "Oklahoma",
+  OR: "Oregon",
+  PA: "Pennsylvania",
+  RI: "Rhode Island",
+  SC: "South Carolina",
+  SD: "South Dakota",
+  TN: "Tennessee",
+  TX: "Texas",
+  UT: "Utah",
+  VT: "Vermont",
+  VA: "Virginia",
+  WA: "Washington",
+  WV: "West Virginia",
+  WI: "Wisconsin",
+  WY: "Wyoming",
+  DC: "District of Columbia",
+};
+const US_STATE_NAME_SET = new Set(Object.values(US_STATE_ABBR_TO_NAME));
 
-/* --- Palettes to mirror Market Simulation --- */
-const SUV_COLORS = {
-  "S SUV": "#FFD32A",
-  "M SUV": "#FF9B1A",
-  "L SUV": "#FF4A32",
-  "XL SUV": "#C21807",
-};
-const PICKUP_COLORS = {
-  "S Pickup": "#1BD15C",
-  "M Pickup": "#00A890",
-  "L Pickup": "#1F6FFF",
-  "XL Pickup": "#7A2AEF",
-};
-const PT_COLORS = {
-  ICE: "#6B7280",
-  HEV: "#10B981",
-  PHEV: "#F59E0B",
-  BEV: "#3B82F6",
-};
-const sizesOrder = ["S", "M", "L", "XL"];
-const DEFAULT_SELECTED = {
-  segments: ["M SUV", "L Pickup"],
-  powertrains: ["ICE", "HEV", "PHEV", "BEV"],
-};
+function toStateName(labelRaw) {
+  if (!labelRaw) return null;
+  const s = String(labelRaw).trim();
 
-function getKeyColor(label) {
-  return SUV_COLORS[label] || PICKUP_COLORS[label] || PT_COLORS[label] || null;
+  const up = s.toUpperCase();
+  if (US_STATE_ABBR_TO_NAME[up]) return US_STATE_ABBR_TO_NAME[up];
+
+  const lower = s.toLowerCase();
+  for (const name of US_STATE_NAME_SET) {
+    if (name.toLowerCase() === lower) return name;
+  }
+
+  const two = (s.match(/\b[A-Z]{2}\b/g) || []).find(
+    (tok) => US_STATE_ABBR_TO_NAME[tok.toUpperCase()]
+  );
+  if (two) return US_STATE_ABBR_TO_NAME[two.toUpperCase()];
+
+  return null;
 }
 
-export default function CustomerGroups({ COLORS, useStyles }) {
-  const styles = useStyles(COLORS);
-
-  // theme helper
-  const isDarkHex = (hex) => {
-    const h = hex?.replace("#", "");
-    if (!h || (h.length !== 6 && h.length !== 3)) return false;
-    const full =
-      h.length === 3
-        ? h
-            .split("")
-            .map((ch) => ch + ch)
-            .join("")
-        : h;
-    const r = parseInt(full.slice(0, 2), 16);
-    const g = parseInt(full.slice(2, 4), 16);
-    const b = parseInt(full.slice(4, 6), 16);
-    const brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-    return brightness < 0.5;
+/* ---------- color helpers ---------- */
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+function hexToRgb(h) {
+  const s = h.replace("#", "");
+  const v =
+    s.length === 3
+      ? s
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : s;
+  return {
+    r: parseInt(v.slice(0, 2), 16),
+    g: parseInt(v.slice(2, 4), 16),
+    b: parseInt(v.slice(4, 6), 16),
   };
-  const sigSrc = isDarkHex(COLORS.panel)
-    ? "/signature-fog.png"
-    : "/signature-moonstone.png";
+}
+function rgbToHex({ r, g, b }) {
+  const to = (x) => x.toString(16).padStart(2, "0");
+  return `#${to(Math.round(r))}${to(Math.round(g))}${to(Math.round(b))}`;
+}
+function blendHex(aHex, bHex, t) {
+  const a = hexToRgb(aHex),
+    b = hexToRgb(bHex);
+  return rgbToHex({
+    r: lerp(a.r, b.r, t),
+    g: lerp(a.g, b.g, t),
+    b: lerp(a.b, b.b, t),
+  });
+}
+function colorForKey(key, allKeys) {
+  const keyStr = String(key);
+  const idx = allKeys.findIndex((k) => String(k) === keyStr);
+  return SERIES_COLORS[(idx >= 0 ? idx : 0) % SERIES_COLORS.length];
+}
 
-  // Controls / state
-  const [k, setK] = useState(4);
-  const [noise, setNoise] = useState(0.35); // 0..1
-  const [ptSize, setPtSize] = useState(3.5); // px radius
-  const [focusOnly, setFocusOnly] = useState(false);
-  const [selected, setSelected] = useState(0); // selected cluster id
-  const [hover, setHover] = useState(null); // {x, y, customer}
-  const svgRef = useRef(null);
-
-  /* ---- NEW: Category + selections (UI parity with Market Simulation) ---- */
-  const [mode, setMode] = useState("segments"); // 'segments' | 'powertrains'
-  const [selectedSegments, setSelectedSegments] = useState(
-    DEFAULT_SELECTED.segments
-  );
-  const [selectedPTs, setSelectedPTs] = useState(DEFAULT_SELECTED.powertrains);
-
-  const suvAccent = "#FF5432";
-  const PICKUP_BLUE = "#60B6FF";
-  const optionStyle = { background: COLORS.panel, color: COLORS.text };
-
-  const hexToRgb = (hex) => {
-    const h = hex.replace("#", "");
-    const full =
-      h.length === 3
-        ? h
-            .split("")
-            .map((c) => c + c)
-            .join("")
-        : h;
-    const r = parseInt(full.slice(0, 2), 16);
-    const g = parseInt(full.slice(2, 4), 16);
-    const b = parseInt(full.slice(4, 6), 16);
-    return `${r}, ${g}, ${b}`;
-  };
-
-  const chipFixed = (active, label) => {
-    const base =
-      getKeyColor(label) || (/Pickup/i.test(label) ? PICKUP_BLUE : suvAccent);
-    const alpha = isDarkHex(COLORS.panel) ? 0.22 : 0.14;
-    return {
-      padding: "6px 10px",
-      borderRadius: 10,
-      border: `1px solid ${active ? base : COLORS.border}`,
-      background: active ? `rgba(${hexToRgb(base)}, ${alpha})` : "transparent",
-      color: COLORS.text,
-      cursor: "pointer",
-      fontSize: 13,
-      transition: "border-color 120ms ease, background-color 120ms ease",
-      minWidth: 90,
-      textAlign: "center",
-    };
-  };
-
-  function toggleSelection(label) {
-    if (mode === "segments") {
-      setSelectedSegments((prev) =>
-        prev.includes(label)
-          ? prev.filter((x) => x !== label)
-          : [...prev, label]
-      );
-    } else {
-      setSelectedPTs((prev) =>
-        prev.includes(label)
-          ? prev.filter((x) => x !== label)
-          : [...prev, label]
-      );
-    }
-  }
-
-  function renderSegmentChips() {
-    const suvLabels = sizesOrder.map((s) => `${s} SUV`);
-    const pickupLabels = sizesOrder.map((s) => `${s} Pickup`);
-    return (
-      <div style={{ display: "grid", gap: 8, marginBottom: 20 }}>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(4, max-content)",
-            gap: 8,
-            justifyContent: "start",
-          }}
-        >
-          {suvLabels.map((label) => {
-            const active = selectedSegments.includes(label);
-            return (
-              <button
-                key={label}
-                onClick={() => toggleSelection(label)}
-                style={chipFixed(active, label)}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(4, max-content)",
-            gap: 8,
-            justifyContent: "start",
-          }}
-        >
-          {pickupLabels.map((label) => {
-            const active = selectedSegments.includes(label);
-            return (
-              <button
-                key={label}
-                onClick={() => toggleSelection(label)}
-                style={chipFixed(active, label)}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  /* ---- End NEW UI block ---- */
-
-  // Synthetic data
-  const { customers, centers } = useMemo(
-    () => makeCustomers(k, noise),
-    [k, noise]
-  );
-
-  // Aggregations
-  const overall = useMemo(() => summarize(customers), [customers]);
-  const clusterAgg = useMemo(
-    () =>
-      range(k).map((c) => summarize(customers.filter((d) => d.cluster === c))),
-    [customers, k]
-  );
-
-  // Row 2 — Price line over ranges
-  const priceLine = useMemo(() => buildPriceBins(customers), [customers]);
-
-  // Row 2 — Perception points (dummy “perceptions” for demo)
-  const perceptions = useMemo(() => makePerceptionPoints(), []);
-
-  // Row 3 — US bubbles (demo cities + populations)
-  const bubbles = useMemo(() => makeUSBubbleData(), []);
-
-  // Derived for rendering
-  const scatterData = useMemo(
-    () => customers.filter((d) => (focusOnly ? d.cluster === selected : true)),
-    [customers, focusOnly, selected]
-  );
-
-  // styles
-  const card = {
-    background: COLORS.panel,
-    color: COLORS.text,
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: 12,
-    boxShadow: isDarkHex(COLORS.panel)
-      ? "0 1px 4px rgba(0,0,0,0.4)"
-      : "0 1px 4px rgba(0,0,0,0.1)",
-    padding: 16,
-  };
-
-  const rowTwoCol = {
-    display: "grid",
-    gridTemplateColumns: "minmax(360px, 1.2fr) minmax(340px, 1fr)",
-    gap: 16,
-    alignItems: "stretch",
-  };
-
-  const controlsRow = {
-    display: "grid",
-    gridTemplateColumns: "repeat(4, minmax(140px, 1fr))",
-    gap: 12,
-    marginTop: 12,
-  };
-
-  const label = { color: COLORS.muted, fontSize: 12, marginBottom: 6 };
-
+/* ---------- chart helpers ---------- */
+function CentroidDot({ cx, cy, payload, onClick, THEME }) {
   return (
-    <div>
-      {/* Header */}
+    <g onClick={() => onClick?.(payload)} style={{ cursor: "pointer" }}>
+      <circle
+        cx={cx}
+        cy={cy}
+        r={18}
+        fill={`${THEME.accent}1A`} /* ~10% */
+        stroke={`${THEME.accent}59`} /* ~35% */
+      />
+      <circle cx={cx} cy={cy} r={3} fill={THEME.accent} />
+      <text
+        x={cx}
+        y={cy - 12}
+        textAnchor="middle"
+        fontSize={12}
+        fill={THEME.text}
+        style={{ pointerEvents: "none", opacity: 0.9 }}
+      >
+        {`C${payload.cluster}`}
+      </text>
+    </g>
+  );
+}
+
+function BigDot(props) {
+  const { cx, cy, fill } = props;
+  return <circle cx={cx} cy={cy} r={10} fill={fill} />;
+}
+
+function TinyDot({ cx, cy, fill }) {
+  return <circle cx={cx} cy={cy} r={5} fill={fill} />; // tweak r
+}
+
+function paddedDomain(vals) {
+  if (!vals.length) return [0, 1];
+  let min = Math.min(...vals);
+  let max = Math.max(...vals);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return [0, 1];
+  if (min === max) {
+    const eps = Math.abs(min || 1) * 0.05;
+    min -= eps;
+    max += eps;
+  }
+  const pad = (max - min) * 0.05;
+  return [min - pad, max + pad];
+}
+const easeInOutQuad = (t) => (t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t);
+function tweenDomain(from, to, t) {
+  const [f0, f1] = from;
+  const [t0, t1] = to;
+  const e = easeInOutQuad(t);
+  return [f0 + (t0 - f0) * e, f1 + (t1 - f1) * e];
+}
+
+/* Keys we’ll scan for state-like values */
+const STATE_KEYS = [
+  "ADMARK_STATE",
+  "admark_state",
+  "STATE",
+  "State",
+  "state",
+  "DM_STATE",
+  "DM_STATE_CODE",
+  "STATE_ABBR",
+  "state_abbr",
+  "ST",
+  "st",
+];
+
+/** ===== Field Groups for the right-side dropdown ===== */
+const FIELD_GROUPS = {
+  Demographics: [
+    "BLD_AGE_GRP",
+    "DEMO_EDUCATION",
+    "GENERATION_GRP",
+    "DEMO_GENDER1",
+    "BLD_HOBBY1_GRP",
+    "DEMO_INCOME",
+    "BLD_LIFESTAGE",
+    "DEMO_LOCATION",
+    "DEMO_MARITAL",
+    "DEMO_EMPLOY",
+    // "ADMARK_STATE", // ← removed per your earlier request
+    "BLD_CHILDREN",
+    "DEMO_EMPTY_NESTER",
+  ],
+  Financing: [
+    "FIN_PU_APR",
+    "FIN_PU_DOWN_PAY",
+    "FIN_PU_TRADE_IN",
+    "BLD_FIN_TOTAL_MONPAY",
+    "FIN_PRICE_UNEDITED",
+    "FIN_LE_LENGTH",
+    "FIN_PU_LENGTH",
+    "C1_PL",
+    "FIN_CREDIT",
+  ],
+
+  "Buying Behavior": ["PR_MOST", "C2S_MODEL_RESPONSE", "SRC_TOP1"],
+  Loyalty: [
+    "OL_MODEL_GRP",
+    "STATE_BUY_BEST",
+    "STATE_CONTINUE",
+    "STATE_FEEL_GOOD",
+    "STATE_REFER",
+    "STATE_PRESTIGE",
+    "STATE_EURO",
+    "STATE_AMER",
+    "STATE_ASIAN",
+    "STATE_SWITCH_FEAT",
+    "STATE_VALUES",
+  ],
+  "Willingness to Pay": [
+    "PV_TAX_INS",
+    "PV_SPEND_LUXURY",
+    "PV_PRESTIGE",
+    "PV_QUALITY",
+    "PV_RESALE",
+    "PV_INEXP_MAINTAIN",
+    "PV_AVOID",
+    "PV_SURVIVE",
+    "PV_PAY_MORE",
+    "PV_BREAKDOWN",
+    "PV_VALUE",
+    "PV_SPEND",
+    "PV_LEASE",
+    "PV_PUTOFF",
+    "STATE_BALANCE",
+    "STATE_WAIT",
+    "STATE_ENJOY_PRESTIGE",
+    "STATE_FIRST_YR",
+    "STATE_NO_LOW_PRICE",
+    "STATE_AUDIO",
+    "STATE_MON_PAY",
+    "STATE_SHOP_MANY",
+  ],
+};
+
+/** ---------- Financing helpers (formatting + numeric detection) ---------- */
+function coerceNumber(v) {
+  if (v === null || v === undefined) return NaN;
+  const n = Number(String(v).trim().replace(/,/g, ""));
+  return Number.isFinite(n) ? n : NaN;
+}
+function isLikelyPercentField(field) {
+  return /APR|PCT|PERCENT/i.test(field);
+}
+function isLikelyCurrencyField(field) {
+  return /DOWN|TRADE|PAY|MONPAY|PAYMENT|PRICE/i.test(field);
+}
+function isLikelyLengthField(field) {
+  return /LENGTH/i.test(field);
+}
+function formatFinValue(field, n) {
+  if (Number.isNaN(n)) return "—";
+  if (isLikelyPercentField(field)) return `${n.toFixed(1)}%`;
+  if (isLikelyCurrencyField(field)) {
+    return n.toLocaleString(undefined, {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0,
+    });
+  }
+  if (isLikelyLengthField(field)) return `${n.toFixed(0)} mo`;
+  return n.toLocaleString();
+}
+
+/* ---- fixed-bucket histogram for FIN_PRICE_UNEDITED ---- */
+function coercePrice(v) {
+  if (v === null || v === undefined) return NaN;
+  const n = Number(String(v).replace(/[$,]/g, "").trim());
+  return Number.isFinite(n) ? n : NaN;
+}
+
+const BUCKET_MIN = 30000; // start of first 5k bucket
+const BUCKET_STEP = 5000; // 5k wide
+const OVER_MIN = 110000; // 110k+ catch-all
+
+function fmtK(n) {
+  return `$${Math.round(n / 1000)}k`;
+}
+function fmtKDec(n) {
+  return `$${(n / 1000).toFixed(1)}k`;
+}
+
+function bucketLabel(low, high) {
+  if (low === -Infinity) return "Under $30k";
+  if (high === Infinity) return "$110k+";
+  const displayHigh = high - 100;
+  return `${fmtK(low)} to ${fmtKDec(displayHigh)}`;
+}
+
+/**
+ * Build fixed 5k buckets (Under $30k, $30k to $34.9k, ... $110k+)
+ */
+function getFixedBucketRanges() {
+  const ranges = [];
+  ranges.push({
+    low: -Infinity,
+    high: BUCKET_MIN,
+    label: bucketLabel(-Infinity, BUCKET_MIN),
+  });
+  for (let low = BUCKET_MIN; low < OVER_MIN; low += BUCKET_STEP) {
+    const high = low + BUCKET_STEP;
+    ranges.push({ low, high, label: bucketLabel(low, high) });
+  }
+  ranges.push({
+    low: OVER_MIN,
+    high: Infinity,
+    label: bucketLabel(OVER_MIN, Infinity),
+  });
+  return ranges;
+}
+
+function buildBucketsForRows(rows) {
+  const ranges = getFixedBucketRanges();
+  const buckets = ranges.map((r) => ({ ...r, count: 0, pct: 0 }));
+
+  const vals = [];
+  for (const r of rows) {
+    const n = coercePrice(r?.FIN_PRICE_UNEDITED);
+    if (Number.isFinite(n)) vals.push(n);
+  }
+  const totalValid = vals.length;
+  if (totalValid === 0) return { data: [], totalValid: 0 };
+
+  for (const v of vals) {
+    let idx = -1;
+    if (v < BUCKET_MIN) {
+      idx = 0;
+    } else if (v >= OVER_MIN) {
+      idx = buckets.length - 1;
+    } else {
+      const stepIdx = Math.floor((v - BUCKET_MIN) / BUCKET_STEP);
+      idx =
+        1 +
+        Math.max(
+          0,
+          Math.min(stepIdx, (OVER_MIN - BUCKET_MIN) / BUCKET_STEP - 1)
+        );
+    }
+    if (idx >= 0) buckets[idx].count += 1;
+  }
+
+  for (const b of buckets) {
+    b.pct = totalValid > 0 ? (b.count / totalValid) * 100 : 0;
+  }
+
+  const data = buckets.map((b) => ({
+    label: b.label,
+    pct: b.pct,
+    count: b.count,
+  }));
+  return { data, totalValid };
+}
+
+/** Build series for AreaChart grouped by a key ('cluster' or 'model') */
+function buildPriceSeriesByGroup(rows, groupingKey, groupOrder) {
+  const byGroup = new Map();
+  for (const r of rows) {
+    const k = groupingKey === "cluster" ? r.cluster : String(r.model);
+    if (!byGroup.has(k)) byGroup.set(k, []);
+    byGroup.get(k).push(r);
+  }
+  const keys = groupOrder ?? Array.from(byGroup.keys());
+  const series = [];
+  for (const k of keys) {
+    const arr = byGroup.get(k) || [];
+    const { data } = buildBucketsForRows(arr);
+    if (data.length) series.push({ key: k, data });
+  }
+  return series;
+}
+
+/* ---- Attitudes agree calc (policy-aligned) ---- */
+const AGREE_TOP3 = new Set(["strongly agree", "agree", "somewhat agree"]);
+const AGREE_TOP2 = new Set(["strongly agree", "somewhat agree"]);
+function normalizeStr(v) {
+  return String(v ?? "")
+    .trim()
+    .toLowerCase();
+}
+function getAttRaw(row, varName) {
+  const v = row?.[varName];
+  if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+  const aliases = [
+    `${varName}_LABEL`,
+    `${varName}_TXT`,
+    `${varName}_TEXT`,
+    `${varName}_DESC`,
+    `${varName}_LAB`,
+  ];
+  for (const a of aliases) {
+    const va = row?.[a];
+    if (va !== undefined && va !== null && String(va).trim() !== "") return va;
+  }
+  return null;
+}
+function normalizeLabel(s) {
+  return String(s ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+function resolveMappedLabel(row, varName, demoLookups) {
+  const raw = getAttRaw(row, varName);
+  if (raw === null || raw === undefined) return null;
+  const codeMap = demoLookups.get(varName) || new Map();
+
+  if (codeMap.has(raw)) return codeMap.get(raw);
+  const asStr = String(raw);
+  if (codeMap.has(asStr)) return codeMap.get(asStr);
+  const asNum = Number(asStr);
+  if (Number.isFinite(asNum)) {
+    if (codeMap.has(asNum)) return codeMap.get(asNum);
+    if (codeMap.has(String(asNum))) return codeMap.get(String(asNum));
+  }
+  return asStr;
+}
+function agreePolicyFor(varName) {
+  if (varName === "OL_MODEL_GRP") return "LOYAL_ONLY";
+  if (/^STATE_/i.test(varName)) return "TOP2";
+  return "TOP3";
+}
+function isTopNAgree(label, policy) {
+  const s = normalizeLabel(label);
+  if (policy === "LOYAL_ONLY") return s === "loyal";
+  if (policy === "TOP2") return AGREE_TOP2.has(s);
+  return AGREE_TOP3.has(s);
+}
+function percentAgreeMappedPolicy(
+  rows,
+  varName,
+  demoLookups,
+  { includeMissingInDenom = true } = {}
+) {
+  let agree = 0,
+    valid = 0,
+    missing = 0;
+  const policy = agreePolicyFor(varName);
+  for (const r of rows) {
+    const lab = resolveMappedLabel(r, varName, demoLookups);
+    if (!lab) {
+      missing++;
+      continue;
+    }
+    valid++;
+    if (isTopNAgree(lab, policy)) agree++;
+  }
+  const denom = includeMissingInDenom ? valid + missing : valid;
+  return denom > 0 ? (agree / denom) * 100 : NaN;
+}
+
+export default function CustomerGroups({ COLORS: THEME, useStyles }) {
+  const [group, setGroup] = useState("SUV");
+  const dataPoints = group === "SUV" ? suvPoints : puPoints;
+
+  // Normalize rows
+  const rows = useMemo(() => {
+    const out = [];
+    for (const r of dataPoints || []) {
+      const modelVal =
+        r?.model ??
+        r?.BLD_DESC_RV_MODEL ??
+        r?.Model ??
+        r?.model_name ??
+        r?.MODEL ??
+        null;
+      const x = Number(r?.emb_x);
+      const y = Number(r?.emb_y);
+      const cl = Number(r?.cluster);
+      if (
+        !modelVal ||
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        !Number.isFinite(cl)
+      )
+        continue;
+
+      out.push({
+        ...r,
+        model: String(modelVal),
+        raw_x: x,
+        raw_y: y,
+        emb_x: x,
+        emb_y: y,
+        cluster: cl,
+      });
+    }
+    return out;
+  }, [dataPoints]);
+
+  const allModels = useMemo(
+    () => Array.from(new Set(rows.map((r) => r.model))).sort(),
+    [rows]
+  );
+
+  const [selectedModels, setSelectedModels] = useState(allModels);
+  const [colorMode, setColorMode] = useState("model"); // default to Model per your earlier request
+  const [zoomCluster, setZoomCluster] = useState(null);
+  const [centerT, setCenterT] = useState(0);
+  const [selectedStateName, setSelectedStateName] = useState(null);
+
+  // Right-side category
+  const [selectedFieldGroup, setSelectedFieldGroup] = useState("Demographics");
+
+  useEffect(() => setSelectedModels(allModels), [allModels]);
+  useEffect(() => {
+    setZoomCluster(null);
+    setCenterT(0);
+  }, [group]);
+
+  const toggleModel = (m) =>
+    setSelectedModels((prev) =>
+      prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]
+    );
+  const selectAll = () => setSelectedModels(allModels);
+  const clearAll = () => setSelectedModels([]);
+
+  // --- LOOKUP TABLES (incl. ADMARK_STATE code → label) ---
+  const demoLookups = useMemo(() => {
+    const byField = new Map();
+    for (const row of demosMapping || []) {
+      const field = String(row?.NAME ?? "").trim();
+      if (!field) continue;
+      const start = row?.START;
+      const label = String(row?.LABEL ?? "").trim();
+      if (!byField.has(field)) byField.set(field, new Map());
+      const m = byField.get(field);
+      m.set(start, label);
+      m.set(String(start), label);
+      if (Number.isFinite(Number(start))) m.set(Number(start), label);
+    }
+    return byField;
+  }, []);
+
+  // ---------- Variable display labels (code → friendly text) ----------
+  const VAR_LABELS = useMemo(() => {
+    const map = new Map();
+    for (const row of codeToTextMapRaw || []) {
+      let code = "";
+      let text = "";
+      if (Array.isArray(row)) {
+        code = String(row[0] ?? "").trim();
+        text = String(row[1] ?? "").trim();
+      } else if (row && typeof row === "object") {
+        code = String(
+          row.code ??
+            row.CODE ??
+            row.key ??
+            row.Key ??
+            row.variable ??
+            row.VARIABLE ??
+            ""
+        ).trim();
+        text = String(
+          row.text ?? row.label ?? row.LABEL ?? row.display ?? row.Display ?? ""
+        ).trim();
+      }
+      if (code) map.set(code, text || code);
+    }
+    return map;
+  }, [codeToTextMapRaw]);
+
+  function varLabel(code) {
+    const c = String(code ?? "").trim();
+    return VAR_LABELS.get(c) || c;
+  }
+
+  // Resolve full state name from row
+  const getRowStateName = useMemo(() => {
+    const codeMap = demoLookups.get("ADMARK_STATE") || new Map();
+    return (row) => {
+      for (const k of STATE_KEYS) {
+        if (row && row[k] != null && String(row[k]).trim() !== "") {
+          let raw = row[k];
+          let val = String(raw).trim();
+
+          if (k === "ADMARK_STATE") {
+            const mapped =
+              codeMap.get(raw) ||
+              codeMap.get(String(raw)) ||
+              codeMap.get(Number(raw));
+            if (mapped) val = String(mapped).trim();
+          }
+
+          const name =
+            toStateName(val) ||
+            US_STATE_ABBR_TO_NAME[String(val).toUpperCase()] ||
+            null;
+          if (name) return name;
+
+          const two = (val.match(/\b[A-Z]{2}\b/g) || []).find(
+            (tok) => US_STATE_ABBR_TO_NAME[tok.toUpperCase()]
+          );
+          if (two) return US_STATE_ABBR_TO_NAME[two.toUpperCase()];
+        }
+      }
+      return null;
+    };
+  }, [demoLookups]);
+
+  // Model filter ONLY (scatter not affected by state)
+  const baseByModel = useMemo(() => {
+    const active = selectedModels?.length ? selectedModels : allModels;
+    return rows.filter((r) => active.includes(r.model));
+  }, [rows, selectedModels, allModels]);
+
+  // Scatter frame (model + optional cluster zoom)
+  const plotFrame = useMemo(
+    () =>
+      zoomCluster == null
+        ? baseByModel
+        : baseByModel.filter((r) => r.cluster === zoomCluster),
+    [baseByModel, zoomCluster]
+  );
+
+  // Demographics scope (model + optional cluster zoom + optional state)
+  const scopeRows = useMemo(() => {
+    const base =
+      zoomCluster == null
+        ? baseByModel
+        : baseByModel.filter((r) => r.cluster === zoomCluster);
+    if (!selectedStateName) return base;
+    return base.filter((r) => getRowStateName(r) === selectedStateName);
+  }, [baseByModel, zoomCluster, selectedStateName, getRowStateName]);
+
+  const availableClusters = useMemo(
+    () =>
+      Array.from(new Set(baseByModel.map((r) => r.cluster))).sort(
+        (a, b) => a - b
+      ),
+    [baseByModel]
+  );
+
+  useEffect(() => {
+    if (zoomCluster != null && !availableClusters.includes(zoomCluster))
+      setZoomCluster(null);
+  }, [availableClusters, zoomCluster]);
+
+  // Centroids for collapsing
+  const groupingKey = colorMode === "cluster" ? "cluster" : "model";
+  const centroidsByGroup = useMemo(() => {
+    const acc = new Map();
+    for (const r of plotFrame) {
+      const k = colorMode === "cluster" ? r.cluster : String(r.model);
+      if (!acc.has(k)) acc.set(k, { sumX: 0, sumY: 0, n: 0 });
+      const s = acc.get(k);
+      s.sumX += r.emb_x;
+      s.sumY += r.emb_y;
+      s.n += 1;
+    }
+    const out = new Map();
+    for (const [k, s] of acc.entries())
+      out.set(k, { cx: s.sumX / s.n, cy: s.sumY / s.n });
+    return out;
+  }, [plotFrame, colorMode]);
+
+  const plotDataCentered = useMemo(() => {
+    if (centerT <= 0) return plotFrame;
+    const out = new Array(plotFrame.length);
+    for (let i = 0; i < plotFrame.length; i++) {
+      const r = plotFrame[i];
+      const key = colorMode === "cluster" ? r.cluster : String(r.model);
+      const c = centroidsByGroup.get(key);
+      out[i] = c
+        ? {
+            ...r,
+            emb_x: lerp(r.raw_x, c.cx, centerT),
+            emb_y: lerp(r.raw_y, c.cy, centerT),
+          }
+        : r;
+    }
+    return out;
+  }, [plotFrame, centroidsByGroup, centerT, colorMode]);
+
+  const groupKeys = useMemo(() => {
+    const g = new Set(plotDataCentered.map((r) => r[groupingKey]));
+    let arr = Array.from(g);
+    if (colorMode === "cluster")
+      arr = arr.filter((k) => Number.isFinite(k)).sort((a, b) => a - b);
+    else arr = arr.map(String).sort();
+    return arr;
+  }, [plotDataCentered, groupingKey, colorMode]);
+
+  const series = useMemo(() => {
+    const buckets = new Map();
+    for (const r of plotDataCentered) {
+      const k = colorMode === "cluster" ? r.cluster : String(r.model);
+      if (!buckets.has(k)) buckets.set(k, []);
+      buckets.get(k).push(r);
+    }
+    return groupKeys.map((k) => ({ key: k, data: buckets.get(k) || [] }));
+  }, [plotDataCentered, groupKeys, colorMode]);
+
+  const modelsInScope = useMemo(() => {
+    const set = new Set();
+    for (const r of plotFrame) set.add(r.model);
+    return Array.from(set).sort();
+  }, [plotFrame]);
+
+  const [demoModel, setDemoModel] = useState(null);
+  useEffect(() => {
+    if (demoModel && !modelsInScope.includes(demoModel)) setDemoModel(null);
+  }, [modelsInScope, demoModel]);
+
+  // Attitudes selections (default to first in each group)
+  const LOYALTY_VARS = FIELD_GROUPS.Loyalty;
+  const WTP_VARS = FIELD_GROUPS["Willingness to Pay"];
+  const [attXVar, setAttXVar] = useState(LOYALTY_VARS[0]);
+  const [attYVar, setAttYVar] = useState(WTP_VARS[0]);
+
+  // Attitudes points computed from current scopeRows (includes state filter)
+  const attitudesPoints = useMemo(() => {
+    const srcRows = demoModel
+      ? scopeRows.filter((r) => r.model === demoModel)
+      : scopeRows;
+    const byGroup = new Map();
+    for (const r of srcRows) {
+      const k = colorMode === "cluster" ? r.cluster : String(r.model);
+      if (!byGroup.has(k)) byGroup.set(k, []);
+      byGroup.get(k).push(r);
+    }
+
+    const order = groupKeys; // keep consistent colors with scatter/price chart
+    const pts = [];
+    for (const k of order) {
+      const rs = byGroup.get(k) || [];
+      const x = percentAgreeMappedPolicy(rs, attXVar, demoLookups, {
+        includeMissingInDenom: true,
+      });
+      const y = percentAgreeMappedPolicy(rs, attYVar, demoLookups, {
+        includeMissingInDenom: true,
+      });
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      pts.push({
+        key: k,
+        name: colorMode === "cluster" ? `C${k}` : String(k),
+        x,
+        y,
+        n: rs.length,
+        color: colorForKey(k, order),
+      });
+    }
+    return pts;
+  }, [
+    scopeRows,
+    colorMode,
+    groupKeys,
+    attXVar,
+    attYVar,
+    demoLookups,
+    demoModel,
+  ]);
+
+  const clusterCentroidsForHotspots = useMemo(() => {
+    const byCluster = new Map();
+    for (const r of baseByModel) {
+      const k = r.cluster;
+      if (!byCluster.has(k)) byCluster.set(k, { sumX: 0, sumY: 0, n: 0 });
+      const s = byCluster.get(k);
+      s.sumX += r.emb_x;
+      s.sumY += r.emb_y;
+      s.n += 1;
+    }
+    return Array.from(byCluster.entries()).map(([cluster, s]) => ({
+      cluster,
+      emb_x: s.sumX / s.n,
+      emb_y: s.sumY / s.n,
+    }));
+  }, [baseByModel]);
+
+  // Axis tweening (based on plot frame)
+  const targetX = useMemo(
+    () => paddedDomain(plotFrame.map((r) => r.emb_x)),
+    [plotFrame]
+  );
+  const targetY = useMemo(
+    () => paddedDomain(plotFrame.map((r) => r.emb_y)),
+    [plotFrame]
+  );
+  const [animX, setAnimX] = useState(targetX);
+  const [animY, setAnimY] = useState(targetY);
+  const rafRef = useRef(null);
+  const startRef = useRef(0);
+  const fromXRef = useRef(targetX);
+  const fromYRef = useRef(targetY);
+  useEffect(() => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    const duration = 400;
+    startRef.current = performance.now();
+    fromXRef.current = animX || targetX;
+    fromYRef.current = animY || targetY;
+    const step = (now) => {
+      const t = Math.min(1, (now - startRef.current) / duration);
+      setAnimX(tweenDomain(fromXRef.current, targetX, t));
+      setAnimY(tweenDomain(fromYRef.current, targetY, t));
+      if (t < 1) rafRef.current = requestAnimationFrame(step);
+      else rafRef.current = null;
+    };
+    rafRef.current = requestAnimationFrame(step);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetX[0], targetX[1], targetY[0], targetY[1]]);
+
+  /* ---------------- Demographics (map context) ---------------- */
+  const demoBaseRows = useMemo(() => {
+    return zoomCluster == null
+      ? baseByModel
+      : baseByModel.filter((r) => r.cluster === zoomCluster);
+  }, [baseByModel, zoomCluster]);
+
+  const mapBaseRows = useMemo(() => {
+    return demoModel
+      ? demoBaseRows.filter((r) => r.model === demoModel)
+      : demoBaseRows;
+  }, [demoBaseRows, demoModel]);
+
+  const stateAgg = useMemo(() => {
+    const counts = new Map();
+    let total = 0;
+
+    for (const r of mapBaseRows) {
+      const name = getRowStateName(r);
+      if (!name) continue;
+      counts.set(name, (counts.get(name) || 0) + 1);
+      total += 1;
+    }
+
+    const pcts = new Map();
+    let maxPct = 0;
+
+    if (total > 0) {
+      for (const [name, c] of counts.entries()) {
+        const pct = (c / total) * 100;
+        pcts.set(name, pct);
+        if (pct > maxPct) maxPct = pct;
+      }
+    }
+
+    return { counts, pcts, total, maxPct };
+  }, [mapBaseRows, getRowStateName]);
+
+  const [hoverState, setHoverState] = useState(null);
+
+  /* ===== Summary builder restricted to selected field group ===== */
+  const demoSummary = useMemo(() => {
+    const sections = [];
+
+    const fields = FIELD_GROUPS[selectedFieldGroup] || [];
+    const srcAll = demoModel
+      ? scopeRows.filter((r) => r.model === demoModel)
+      : scopeRows;
+
+    // Financing fields that should ALWAYS be categorical
+    const categoricalFinFields = new Set(["C1_PL", "FIN_CREDIT"]);
+
+    for (const field of fields) {
+      const codeMap = demoLookups.get(field) || new Map();
+
+      // Numeric aggregation for Financing fields not forced categorical
+      const isFinancingNumeric =
+        selectedFieldGroup === "Financing" && !categoricalFinFields.has(field);
+
+      if (isFinancingNumeric) {
+        let sum = 0;
+        let wsum = 0;
+        let nValid = 0;
+        let nMissing = 0;
+
+        for (const r of srcAll) {
+          const rawVal = r?.[field];
+          const num = coerceNumber(rawVal);
+          if (Number.isFinite(num)) {
+            sum += num;
+            wsum += 1;
+            nValid++;
+          } else {
+            nMissing++;
+          }
+        }
+
+        if (nValid > 0) {
+          const avg = wsum > 0 ? sum / wsum : NaN;
+          sections.push({
+            field,
+            mode: "numeric",
+            kpi: {
+              label: "Average",
+              value: avg,
+              display: formatFinValue(field, avg),
+              nValid,
+              nMissing,
+            },
+          });
+          continue;
+        }
+        // fall through to categorical if no numeric data
+      }
+
+      // ---------- Categorical (% of total INCLUDING Unknown) ----------
+      const counts = new Map();
+      let validCount = 0;
+      let missingCount = 0;
+
+      for (const r of srcAll) {
+        const rawVal = r?.[field];
+        if (
+          rawVal === undefined ||
+          rawVal === null ||
+          String(rawVal).trim() === ""
+        ) {
+          missingCount++;
+          continue;
+        }
+
+        let label = String(rawVal).trim();
+        if (codeMap.has(rawVal)) label = codeMap.get(rawVal);
+        else if (codeMap.has(String(rawVal)))
+          label = codeMap.get(String(rawVal));
+        else if (codeMap.has(Number(rawVal)))
+          label = codeMap.get(Number(rawVal));
+        else {
+          const asNum = Number(label);
+          if (Number.isFinite(asNum) && codeMap.has(asNum))
+            label = codeMap.get(asNum);
+          else if (codeMap.has(String(asNum)))
+            label = codeMap.get(String(asNum));
+        }
+
+        counts.set(label, (counts.get(label) || 0) + 1);
+        validCount++;
+      }
+
+      if (validCount + missingCount === 0) continue;
+
+      const fieldTotal = validCount + missingCount;
+      const items = Array.from(counts.entries())
+        .map(([label, count]) => ({
+          label,
+          count,
+          pct: (count / fieldTotal) * 100,
+        }))
+        .sort((a, b) => b.count - a.count);
+
+      if (missingCount > 0) {
+        items.push({
+          label: "Unknown",
+          count: missingCount,
+          pct: (missingCount / fieldTotal) * 100,
+        });
+      }
+
+      const sumPct = items.reduce((a, b) => a + b.pct, 0);
+      if (Math.abs(sumPct - 100) > 0.1 && items.length > 0) {
+        const diff = 100 - sumPct;
+        items[items.length - 1].pct += diff;
+      }
+
+      sections.push({ field, mode: "categorical", items, total: fieldTotal });
+    }
+
+    sections.sort((a, b) => {
+      if (a.mode !== b.mode) return a.mode === "numeric" ? -1 : 1;
+      return (b.items?.[0]?.pct || 0) - (a.items?.[0]?.pct || 0);
+    });
+
+    return sections;
+  }, [scopeRows, demoModel, demoLookups, selectedFieldGroup]);
+
+  /* ---------- UI ---------- */
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        padding: 16,
+        fontFamily: "system-ui, sans-serif",
+        background: THEME.bg,
+        color: THEME.text,
+      }}
+    >
+      <h1 style={{ margin: 0, marginBottom: 8, color: THEME.accent }}>
+        Customer Groups
+      </h1>
+
+      {/* tiny status line */}
+      <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 12 }}>
+        Records (models filter): {baseByModel.length.toLocaleString()}
+        {zoomCluster != null ? ` • Zoom C${zoomCluster}` : ""}
+        {selectedStateName
+          ? ` • Demographics filtered to ${selectedStateName}`
+          : ""}
+      </div>
+
+      {/* Controls */}
       <div
         style={{
-          background: "transparent",
-          border: "none",
-          padding: 18,
           display: "grid",
-          gap: 10,
+          gridTemplateColumns: "1fr",
+          gap: 16,
+          alignItems: "start",
+          marginBottom: 12,
         }}
       >
-        <h1 style={{ ...styles.h1, margin: 0 }}>
-          <span
-            style={{ color: COLORS.accent, transition: "color 120ms ease" }}
+        {/* Dataset toggle */}
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ fontWeight: 600 }}>Dataset:</div>
+          <button
+            onClick={() => setGroup("SUV")}
+            style={{
+              background: group === "SUV" ? THEME.accent : THEME.panel,
+              color: group === "SUV" ? THEME.onAccent : THEME.muted,
+              border: `1px solid ${
+                group === "SUV" ? THEME.accent : THEME.border
+              }`,
+              borderRadius: 8,
+              padding: "6px 10px",
+              cursor: "pointer",
+              fontSize: 13,
+            }}
           >
-            Customer Groups
-          </span>
-        </h1>
-
-        <p style={{ color: COLORS.muted, fontSize: 20, margin: 0 }}>
-          Explore customer clusters. Hover points for details, click to focus a
-          cluster.
-        </p>
-
-        {/* --- NEW: Category + chip selectors (placement matches Market Simulation) --- */}
-        <div style={{ marginTop: 30, marginBottom: 2 }}>
-          <div style={{ color: COLORS.muted }}>Choose category</div>
+            SUVs
+          </button>
+          <button
+            onClick={() => setGroup("Pickup")}
+            style={{
+              background: group === "Pickup" ? THEME.accent : THEME.panel,
+              color: group === "Pickup" ? THEME.onAccent : THEME.muted,
+              border: `1px solid ${
+                group === "Pickup" ? THEME.accent : THEME.border
+              }`,
+              borderRadius: 8,
+              padding: "6px 10px",
+              cursor: "pointer",
+              fontSize: 13,
+            }}
+          >
+            Pickups
+          </button>
         </div>
 
-        <div
-          style={{ display: "flex", gap: 8, marginTop: 0, marginBottom: 20 }}
-        >
-          {[
-            { id: "segments", label: "Segments" },
-            { id: "powertrains", label: "Powertrains" },
-          ].map((m) => (
+        {/* Model buttons */}
+        <div>
+          <div style={{ marginBottom: 8, fontWeight: 600 }}>Models:</div>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              maxWidth: 1000,
+            }}
+          >
+            {allModels.map((m) => {
+              const active = selectedModels.includes(m);
+              return (
+                <button
+                  key={m}
+                  onClick={() => toggleModel(m)}
+                  style={{
+                    background: active ? THEME.accent : THEME.panel,
+                    color: active ? THEME.onAccent : THEME.muted,
+                    border: `1px solid ${active ? THEME.accent : THEME.border}`,
+                    borderRadius: 8,
+                    padding: "6px 10px",
+                    cursor: "pointer",
+                    fontSize: 13,
+                  }}
+                >
+                  {m}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
             <button
-              key={m.id}
-              onClick={() => setMode(m.id)}
+              onClick={selectAll}
               style={{
-                padding: "8px 12px",
-                borderRadius: 10,
-                border:
-                  mode === m.id
-                    ? isDarkHex(COLORS.panel)
-                      ? "1px solid #FFFFFF"
-                      : "1px solid #FF5432"
-                    : `1px solid ${COLORS.border}`,
-                background:
-                  mode === m.id
-                    ? isDarkHex(COLORS.panel)
-                      ? "rgba(255,255,255,0.22)"
-                      : "rgba(255,84,50,0.18)"
-                    : "transparent",
-                fontSize: 16,
-                color: COLORS.text,
+                background: THEME.panel,
+                color: THEME.text,
+                border: `1px solid ${THEME.border}`,
+                borderRadius: 8,
+                padding: "6px 10px",
                 cursor: "pointer",
-                transition:
-                  "background-color 120ms ease, border-color 120ms ease",
               }}
             >
-              {m.label}
+              Select all
             </button>
-          ))}
+            <button
+              onClick={clearAll}
+              style={{
+                background: THEME.panel,
+                color: THEME.text,
+                border: `1px solid ${THEME.border}`,
+                borderRadius: 8,
+                padding: "6px 10px",
+                cursor: "pointer",
+              }}
+            >
+              Clear
+            </button>
+          </div>
         </div>
 
-        {/* Chips */}
-        <div style={{ marginTop: 6 }}>
-          <div style={{ color: COLORS.muted, marginBottom: 12 }}>
-            {mode === "segments" ? "Segments" : "Powertrains"}: choose one or
-            more
+        {/* Color mode + Cluster zoom */}
+        <div
+          style={{
+            display: "flex",
+            gap: 16,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <label>
+            Color by:&nbsp;
+            <select
+              value={colorMode}
+              onChange={(e) => setColorMode(e.target.value)}
+              style={{
+                background: THEME.panel,
+                color: THEME.text,
+                border: `1px solid ${THEME.border}`,
+                padding: "6px 10px",
+                borderRadius: 8,
+              }}
+            >
+              <option value="cluster">Cluster</option>
+              <option value="model">Model</option>
+            </select>
+          </label>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontWeight: 600 }}>Cluster zoom:</span>
+            <button
+              onClick={() => setZoomCluster(null)}
+              style={{
+                background: zoomCluster == null ? THEME.accent : THEME.panel,
+                color: zoomCluster == null ? THEME.onAccent : THEME.muted,
+                border: `1px solid ${
+                  zoomCluster == null ? THEME.accent : THEME.border
+                }`,
+                borderRadius: 8,
+                padding: "6px 10px",
+                cursor: "pointer",
+                fontSize: 13,
+              }}
+            >
+              All
+            </button>
+            {availableClusters.map((k) => {
+              const active = zoomCluster === k;
+              return (
+                <button
+                  key={k}
+                  onClick={() => setZoomCluster(k)}
+                  style={{
+                    background: active ? THEME.accent : THEME.panel,
+                    color: active ? THEME.onAccent : THEME.muted,
+                    border: `1px solid ${active ? THEME.accent : THEME.border}`,
+                    borderRadius: 8,
+                    padding: "6px 10px",
+                    cursor: "pointer",
+                    fontSize: 13,
+                  }}
+                >{`C${k}`}</button>
+              );
+            })}
           </div>
 
-          {mode === "segments" ? (
-            renderSegmentChips()
-          ) : (
+          <div style={{ fontSize: 12, opacity: 0.8 }}>
+            Showing {plotDataCentered.length.toLocaleString()} points
+            {zoomCluster != null ? ` • Zoom: C${zoomCluster}` : ""} • Dataset:{" "}
+            {group}
+          </div>
+        </div>
+
+        {/* Center focus slider */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ fontWeight: 600, minWidth: 110 }}>Center focus:</div>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={centerT}
+            onChange={(e) => setCenterT(parseFloat(e.target.value))}
+            style={{ width: 260 }}
+          />
+          <div
+            style={{
+              width: 50,
+              textAlign: "right",
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {(centerT * 100).toFixed(0)}%
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>
+            {colorMode === "cluster"
+              ? "Collapse to cluster centroids"
+              : "Collapse to model centroids"}{" "}
+          </div>
+        </div>
+      </div>
+
+      {/* Chart + Right Panel */}
+      <div
+        style={{ display: "flex", gap: 16, alignItems: "stretch", height: 500 }}
+      >
+        {/* Chart (NOT filtered by state) */}
+        <div
+          style={{
+            flex: 1,
+            background: THEME.panel,
+            border: `1px solid ${THEME.border}`,
+            borderRadius: 12,
+            padding: 10,
+            height: "100%",
+            boxSizing: "border-box",
+          }}
+        >
+          <ResponsiveContainer width="100%" height="100%">
+            <ScatterChart margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
+              <CartesianGrid stroke={THEME.border} />
+              <XAxis
+                type="number"
+                dataKey="emb_x"
+                domain={animX}
+                tickFormatter={() => ""}
+                tickLine={false}
+                axisLine={false}
+                tickMargin={0}
+              />
+              <YAxis
+                type="number"
+                dataKey="emb_y"
+                domain={animY}
+                tickFormatter={() => ""}
+                tickLine={false}
+                axisLine={false}
+                tickMargin={0}
+              />
+
+              <Tooltip
+                cursor={{ stroke: THEME.border }}
+                content={({ active, payload }) => {
+                  if (!active || !payload?.length) return null;
+                  const p = payload[0]?.payload ?? {};
+                  const umapX = Number(p.raw_x);
+                  const umapY = Number(p.raw_y);
+                  const dispX = Number(p.emb_x);
+                  const dispY = Number(p.emb_y);
+                  const seriesName = payload[0]?.name ?? "";
+                  return (
+                    <div
+                      style={{
+                        background: THEME.bg,
+                        border: `1px solid ${THEME.border}`,
+                        color: THEME.text,
+                        borderRadius: 8,
+                        padding: "8px 10px",
+                        fontSize: 12,
+                        maxWidth: 240,
+                      }}
+                    >
+                      {seriesName && (
+                        <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                          {seriesName}
+                        </div>
+                      )}
+                      <div style={{ opacity: 0.85, marginBottom: 4 }}>
+                        UMAP (raw)
+                      </div>
+                      <div>
+                        UMAP&nbsp;1 (x):{" "}
+                        {Number.isFinite(umapX) ? umapX.toFixed(4) : "—"}
+                      </div>
+                      <div>
+                        UMAP&nbsp;2 (y):{" "}
+                        {Number.isFinite(umapY) ? umapY.toFixed(4) : "—"}
+                      </div>
+                      <div
+                        style={{ opacity: 0.85, marginTop: 8, marginBottom: 4 }}
+                      >
+                        Displayed{centerT > 0 ? " (centered)" : ""}
+                      </div>
+                      <div>
+                        x: {Number.isFinite(dispX) ? dispX.toFixed(4) : "—"}
+                      </div>
+                      <div>
+                        y: {Number.isFinite(dispY) ? dispY.toFixed(4) : "—"}
+                      </div>
+                    </div>
+                  );
+                }}
+              />
+
+              <Legend wrapperStyle={{ color: THEME.text }} />
+              {series.map(({ key, data }) => (
+                <Scatter
+                  key={String(key)}
+                  name={colorMode === "cluster" ? `C${key}` : key}
+                  data={data}
+                  fill={colorForKey(key, groupKeys)}
+                  isAnimationActive={false}
+                  onClick={(pt) => {
+                    const k = pt?.payload?.cluster;
+                    if (Number.isFinite(k)) setZoomCluster(k);
+                  }}
+                  shape={<TinyDot />}
+                />
+              ))}
+              {zoomCluster == null && (
+                <Scatter
+                  data={clusterCentroidsForHotspots}
+                  name=""
+                  legendType="none"
+                  isAnimationActive={false}
+                  shape={(props) => (
+                    <CentroidDot
+                      {...props}
+                      THEME={THEME}
+                      onClick={(p) => {
+                        if (Number.isFinite(p?.cluster))
+                          setZoomCluster(p.cluster);
+                      }}
+                    />
+                  )}
+                />
+              )}
+            </ScatterChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Right Panel */}
+        <div
+          style={{
+            width: 360,
+            height: "100%",
+            background: THEME.panel,
+            border: `1px solid ${THEME.border}`,
+            borderRadius: 12,
+            padding: 12,
+            color: THEME.text,
+            display: "flex",
+            flexDirection: "column",
+            boxSizing: "border-box",
+          }}
+        >
+          {/* Header row with category dropdown */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: 8,
+              gap: 8,
+            }}
+          >
+            <select
+              value={selectedFieldGroup}
+              onChange={(e) => setSelectedFieldGroup(e.target.value)}
+              style={{
+                background: THEME.panel,
+                color: THEME.text,
+                border: `1px solid ${THEME.border}`,
+                padding: "6px 10px",
+                borderRadius: 8,
+                fontWeight: 700,
+              }}
+              title="Choose category"
+            >
+              {Object.keys(FIELD_GROUPS).map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Model focus (single-select) */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              flexWrap: "wrap",
+              marginBottom: 10,
+            }}
+          >
+            <button
+              onClick={() => setDemoModel(null)}
+              style={{
+                background: demoModel == null ? THEME.accent : THEME.panel,
+                color: demoModel == null ? THEME.onAccent : THEME.muted,
+                border: `1px solid ${
+                  demoModel == null ? THEME.accent : THEME.border
+                }`,
+                borderRadius: 8,
+                padding: "4px 8px",
+                cursor: "pointer",
+                fontSize: 12,
+              }}
+            >
+              All
+            </button>
+            {modelsInScope.map((m) => {
+              const active = demoModel === m;
+              return (
+                <button
+                  key={`demoModel-${m}`}
+                  onClick={() => setDemoModel(m)}
+                  style={{
+                    background: active ? THEME.accent : THEME.panel,
+                    color: active ? THEME.onAccent : THEME.muted,
+                    border: `1px solid ${active ? THEME.accent : THEME.border}`,
+                    borderRadius: 8,
+                    padding: "4px 8px",
+                    cursor: "pointer",
+                    fontSize: 12,
+                  }}
+                  title={m}
+                >
+                  {m}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Sections list */}
+          <div
+            style={{
+              overflowY: "auto",
+              paddingRight: 4,
+              gap: 12,
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            {selectedStateName && scopeRows.length === 0 ? (
+              <div
+                style={{
+                  fontStyle: "italic",
+                  opacity: 0.85,
+                  padding: "8px 4px",
+                }}
+              >
+                No records for <b>{selectedStateName}</b> in current scope
+                (check ADMARK_STATE coding).
+              </div>
+            ) : demoSummary.length === 0 ? (
+              <div
+                style={{
+                  fontStyle: "italic",
+                  opacity: 0.8,
+                  padding: "8px 4px",
+                }}
+              >
+                No fields observed in current scope.
+              </div>
+            ) : (
+              demoSummary.map((section) => (
+                <div
+                  key={section.field}
+                  style={{
+                    background: THEME.bg,
+                    border: `1px solid ${THEME.border}`,
+                    borderRadius: 8,
+                    padding: 10,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 700,
+                      marginBottom: 8,
+                      color: THEME.text,
+                    }}
+                  >
+                    {varLabel(section.field)}
+                  </div>
+
+                  {/* Numeric KPI (Financing averages) */}
+                  {section.mode === "numeric" ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        background: THEME.panel,
+                        border: `1px solid ${THEME.border}`,
+                        borderRadius: 8,
+                        padding: "10px 12px",
+                      }}
+                    >
+                      <div style={{ fontSize: 12, opacity: 0.8 }}>Average</div>
+                      <div
+                        style={{
+                          fontSize: 18,
+                          fontWeight: 800,
+                          color: THEME.accent,
+                        }}
+                      >
+                        {section.kpi.display}
+                      </div>
+                      <div style={{ fontSize: 11, opacity: 0.7 }}>
+                        n={section.kpi.nValid.toLocaleString()}
+                        {section.kpi.nMissing
+                          ? ` • missing=${section.kpi.nMissing.toLocaleString()}`
+                          : ""}
+                      </div>
+                    </div>
+                  ) : (
+                    // Categorical (% of total incl Unknown)
+                    section.items.map((it) => (
+                      <div
+                        key={`${section.field}::${it.label}`}
+                        style={{ marginBottom: 6 }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "baseline",
+                            justifyContent: "space-between",
+                            gap: 8,
+                          }}
+                        >
+                          <div style={{ fontSize: 12, color: THEME.muted }}>
+                            {it.label}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 12,
+                              fontVariantNumeric: "tabular-nums",
+                              color: THEME.text,
+                            }}
+                          >
+                            {it.pct.toFixed(1)}%{" "}
+                            <span style={{ opacity: 0.6 }}>
+                              ({it.count.toLocaleString()})
+                            </span>
+                          </div>
+                        </div>
+                        <div
+                          style={{
+                            height: 6,
+                            background: THEME.panel,
+                            border: `1px solid ${THEME.border}`,
+                            borderRadius: 999,
+                            overflow: "hidden",
+                            marginTop: 4,
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: `${Math.min(100, it.pct).toFixed(2)}%`,
+                              height: "100%",
+                              background: THEME.accent,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom row: Stacked (Attitudes over TP) + Map */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "3fr 2fr",
+          gap: 16,
+          marginTop: 16,
+          alignItems: "stretch",
+        }}
+      >
+        {/* LEFT: Attitudes (top) + Transaction Price (bottom) */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 16,
+            minHeight: 640,
+          }}
+        >
+          {/* Attitudes Scatterplot (TOP) */}
+          <div
+            style={{
+              background: THEME.panel,
+              border: `1px solid ${THEME.border}`,
+              borderRadius: 12,
+              padding: 12,
+              flex: 1,
+              minHeight: 300,
+              boxSizing: "border-box",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
             <div
               style={{
                 display: "flex",
+                alignItems: "center",
+                gap: 12,
                 flexWrap: "wrap",
-                gap: 8,
-                marginBottom: 20,
               }}
             >
-              {["ICE", "HEV", "PHEV", "BEV"].map((k) => {
-                const active = selectedPTs.includes(k);
-                const c = getKeyColor(k) || suvAccent;
-                const alpha = isDarkHex(COLORS.panel) ? 0.22 : 0.14;
-                return (
-                  <button
-                    key={k}
-                    onClick={() => toggleSelection(k)}
+              <div style={{ fontWeight: 700 }}>Attitudes Scatterplot</div>
+              <div
+                style={{
+                  marginLeft: "auto",
+                  display: "flex",
+                  gap: 8,
+                  flexWrap: "wrap",
+                }}
+              >
+                <label
+                  style={{ display: "flex", alignItems: "center", gap: 6 }}
+                >
+                  <span style={{ fontSize: 12, opacity: 0.85 }}>
+                    X (Loyalty):
+                  </span>
+                  <select
+                    value={attXVar}
+                    onChange={(e) => setAttXVar(e.target.value)}
                     style={{
+                      background: THEME.panel,
+                      color: THEME.text,
+                      border: `1px solid ${THEME.border}`,
                       padding: "6px 10px",
-                      borderRadius: 10,
-                      border: `1px solid ${active ? c : COLORS.border}`,
-                      background: active
-                        ? `rgba(${hexToRgb(c)}, ${alpha})`
-                        : "transparent",
-                      color: COLORS.text,
-                      cursor: "pointer",
-                      fontSize: 13,
-                      transition:
-                        "border-color 120ms ease, background-color 120ms ease",
-                      minWidth: 90,
-                      textAlign: "center",
+                      borderRadius: 8,
+                      fontSize: 12,
                     }}
                   >
-                    {k}
-                  </button>
-                );
-              })}
+                    {LOYALTY_VARS.map((v) => (
+                      <option key={v} value={v}>
+                        {varLabel(v)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label
+                  style={{ display: "flex", alignItems: "center", gap: 6 }}
+                >
+                  <span style={{ fontSize: 12, opacity: 0.85 }}>Y (WTP):</span>
+                  <select
+                    value={attYVar}
+                    onChange={(e) => setAttYVar(e.target.value)}
+                    style={{
+                      background: THEME.panel,
+                      color: THEME.text,
+                      border: `1px solid ${THEME.border}`,
+                      padding: "6px 10px",
+                      borderRadius: 8,
+                      fontSize: 12,
+                    }}
+                  >
+                    {WTP_VARS.map((v) => (
+                      <option key={v} value={v}>
+                        {varLabel(v)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
             </div>
-          )}
+
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <ScatterChart
+                  margin={{ top: 8, right: 12, bottom: 24, left: 12 }}
+                >
+                  <CartesianGrid stroke={THEME.border} />
+                  <XAxis
+                    type="number"
+                    dataKey="x"
+                    name={varLabel(attXVar)}
+                    tickFormatter={(v) => `${v.toFixed(0)}%`}
+                    tick={{ fill: THEME.muted, fontSize: 12 }}
+                    stroke={THEME.border}
+                    domain={[0, 100]}
+                  />
+                  <YAxis
+                    type="number"
+                    dataKey="y"
+                    name={varLabel(attYVar)}
+                    tickFormatter={(v) => `${v.toFixed(0)}%`}
+                    tick={{ fill: THEME.muted, fontSize: 12 }}
+                    stroke={THEME.border}
+                    domain={[0, 100]}
+                  />
+                  <Tooltip
+                    cursor={{ stroke: THEME.border }}
+                    contentStyle={{
+                      background: THEME.bg,
+                      border: `1px solid ${THEME.border}`,
+                      color: THEME.text,
+                      borderRadius: 8,
+                    }}
+                    formatter={(value, name) => {
+                      if (name === "x")
+                        return [
+                          `${Number(value).toFixed(1)}%`,
+                          varLabel(attXVar),
+                        ];
+                      if (name === "y")
+                        return [
+                          `${Number(value).toFixed(1)}%`,
+                          varLabel(attYVar),
+                        ];
+                      return [value, name];
+                    }}
+                    labelFormatter={() => ""}
+                  />
+
+                  {attitudesPoints.map((pt) => (
+                    <Scatter
+                      key={`att-${pt.key}`}
+                      name={pt.name}
+                      data={[pt]}
+                      fill={pt.color}
+                      isAnimationActive={false}
+                      shape={<BigDot />}
+                    />
+                  ))}
+                </ScatterChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Transaction Price (BOTTOM) */}
+          <div
+            style={{
+              background: THEME.panel,
+              border: `1px solid ${THEME.border}`,
+              borderRadius: 12,
+              padding: 12,
+              flex: 1,
+              minHeight: 300,
+              boxSizing: "border-box",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>
+              Transaction Price
+            </div>
+
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                {(() => {
+                  const priceRows = demoModel
+                    ? scopeRows.filter((r) => r.model === demoModel)
+                    : scopeRows;
+                  const groupingKey =
+                    colorMode === "cluster" ? "cluster" : "model";
+                  const orderKeys = groupKeys;
+                  const series = buildPriceSeriesByGroup(
+                    priceRows,
+                    groupingKey,
+                    orderKeys
+                  );
+
+                  if (!series.length) {
+                    return (
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>
+                        No FIN_PRICE_UNEDITED data available in current scope.
+                      </div>
+                    );
+                  }
+
+                  const maxPct = series.reduce(
+                    (m, s) =>
+                      Math.max(
+                        m,
+                        ...s.data.map((d) =>
+                          Number.isFinite(d.pct) ? d.pct : 0
+                        )
+                      ),
+                    0
+                  );
+                  const yMax = Math.ceil((maxPct + 2) / 5) * 5;
+                  const pctFmt = (v) => `${v.toFixed(0)}%`;
+                  const xLabels = series[0].data.map((d) => d.label);
+
+                  return (
+                    <AreaChart
+                      margin={{ top: 8, right: 8, left: 8, bottom: 56 }}
+                    >
+                      <CartesianGrid stroke={THEME.border} />
+                      <XAxis
+                        dataKey="label"
+                        type="category"
+                        allowDuplicatedCategory={false}
+                        tick={{ fill: THEME.muted, fontSize: 11 }}
+                        stroke={THEME.border}
+                        interval={0}
+                        angle={-20}
+                        textAnchor="end"
+                        height={52}
+                        ticks={xLabels}
+                      />
+                      <YAxis
+                        domain={[0, yMax]}
+                        tickFormatter={pctFmt}
+                        tick={{ fill: THEME.muted, fontSize: 12 }}
+                        stroke={THEME.border}
+                        allowDecimals={false}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          background: THEME.bg,
+                          border: `1px solid ${THEME.border}`,
+                          color: THEME.text,
+                          borderRadius: 8,
+                        }}
+                        formatter={(value, name, payload) => {
+                          const pct = Number(value);
+                          const count = payload?.payload?.count ?? 0;
+                          return [
+                            `${pct.toFixed(1)}% (${count.toLocaleString()})`,
+                            name,
+                          ];
+                        }}
+                        labelFormatter={(label) => label}
+                      />
+                      {/* No Legend */}
+
+                      <defs>
+                        {orderKeys.map((k) => {
+                          const id = `priceFill_${String(k).replace(
+                            /\s+/g,
+                            "_"
+                          )}`;
+                          const col = colorForKey(k, orderKeys);
+                          return (
+                            <linearGradient
+                              key={id}
+                              id={id}
+                              x1="0"
+                              y1="0"
+                              x2="0"
+                              y2="1"
+                            >
+                              <stop
+                                offset="0%"
+                                stopColor={col}
+                                stopOpacity={0.22}
+                              />
+                              <stop
+                                offset="100%"
+                                stopColor={col}
+                                stopOpacity={0}
+                              />
+                            </linearGradient>
+                          );
+                        })}
+                      </defs>
+
+                      {series.map((s) => {
+                        const col = colorForKey(s.key, orderKeys);
+                        const fillId = `url(#priceFill_${String(s.key).replace(
+                          /\s+/g,
+                          "_"
+                        )})`;
+                        const name =
+                          colorMode === "cluster" ? `C${s.key}` : String(s.key);
+                        return (
+                          <React.Fragment key={`series-${String(s.key)}`}>
+                            <Area
+                              type="monotone"
+                              name={name}
+                              data={s.data}
+                              dataKey="pct"
+                              fill={fillId}
+                              stroke="none"
+                              isAnimationActive={false}
+                            />
+                            <Line
+                              type="monotone"
+                              name={name}
+                              data={s.data}
+                              dataKey="pct"
+                              stroke={col}
+                              strokeWidth={2}
+                              dot={false}
+                              activeDot={false}
+                              isAnimationActive={false}
+                            />
+                          </React.Fragment>
+                        );
+                      })}
+                    </AreaChart>
+                  );
+                })()}
+              </ResponsiveContainer>
+            </div>
+          </div>
         </div>
-        {/* --- End NEW block --- */}
-      </div>
 
-      {/* Row 1: Scatter | Radar */}
-      <div style={{ marginTop: 12 }}>
-        <div style={rowTwoCol}>
-          <ScatterClusters
-            COLORS={COLORS}
-            svgRef={svgRef}
-            data={scatterData}
-            allData={customers}
-            centers={centers}
-            k={k}
-            setK={setK}
-            noise={noise}
-            setNoise={setNoise}
-            ptSize={ptSize}
-            setPtSize={setPtSize}
-            focusOnly={focusOnly}
-            setFocusOnly={setFocusOnly}
-            selected={selected}
-            setSelected={setSelected}
-            onHover={setHover}
-          />
-          <RadarCompare
-            COLORS={COLORS}
-            metrics={METRICS}
-            overall={overall}
-            selectedAgg={clusterAgg[selected]}
-            selectedColor={CLUSTER_COLORS[selected % CLUSTER_COLORS.length]}
-          />
-        </div>
-      </div>
-
-      {/* Row 2: Line (price over ranges) | Perception Map */}
-      <div style={{ marginTop: 12 }}>
-        <div style={rowTwoCol}>
-          <PriceLineOverRanges COLORS={COLORS} series={priceLine} />
-          <PerceptionMap COLORS={COLORS} data={demoPerceptionData} />
-        </div>
-      </div>
-
-      {/* Row 3: US Bubble Map */}
-      <div style={{ marginTop: 12 }}>
-        <USBubbleMap COLORS={COLORS} bubbles={bubbles} />
-      </div>
-
-      {/* Signature */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "flex-end",
-          marginTop: 8,
-          paddingRight: 10,
-        }}
-      >
-        <img
-          src={sigSrc}
-          alt="Scout Almanac Pro signature"
-          style={{ width: 50, height: "auto", opacity: 0.9 }}
-        />
-      </div>
-
-      {/* Tooltip */}
-      {hover && (
+        {/* RIGHT: Geographic map */}
         <div
           style={{
-            position: "fixed",
-            left: hover.x + 14,
-            top: hover.y + 14,
-            background: COLORS.panel,
-            border: `1px solid ${COLORS.border}`,
-            color: COLORS.text,
-            padding: "8px 10px",
-            borderRadius: 8,
-            pointerEvents: "none",
-            zIndex: 50,
-            minWidth: 180,
+            background: THEME.panel,
+            border: `1px solid ${THEME.border}`,
+            borderRadius: 12,
+            padding: 12,
+            minHeight: 640,
+            boxSizing: "border-box",
+            position: "relative",
+            display: "flex",
+            flexDirection: "column",
           }}
         >
-          <div style={{ fontWeight: 700, marginBottom: 4 }}>
-            Customer #{hover.customer.id} — Cluster {hover.customer.cluster + 1}
-          </div>
-          <div style={{ fontSize: 12, color: COLORS.muted }}>
-            Engagement: <strong>{hover.customer.engagement.toFixed(1)}</strong>
-            <br />
-            Spend: <strong>${hover.customer.spend.toFixed(0)}</strong>
-            <br />
-            NPS: <strong>{hover.customer.nps.toFixed(0)}</strong>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* -------------------- Scatter Plot (with integrated controls) -------------------- */
-
-function ScatterClusters({
-  COLORS,
-  svgRef,
-  data,
-  allData,
-  centers,
-  k,
-  setK,
-  noise,
-  setNoise,
-  ptSize,
-  setPtSize,
-  focusOnly,
-  setFocusOnly,
-  selected,
-  setSelected,
-  onHover,
-}) {
-  const w = 560,
-    h = 400,
-    pad = 30;
-
-  // local styles
-  const label = { color: COLORS.muted, fontSize: 12, marginBottom: 6 };
-  const controlsRow = {
-    display: "grid",
-    gridTemplateColumns: "repeat(4, minmax(140px, 1fr))",
-    gap: 12,
-    marginTop: 10,
-    marginBottom: 10,
-  };
-
-  // domains
-  const minX = 0,
-    maxX = 100;
-  const minY = 0,
-    maxY = Math.max(1000, Math.max(...allData.map((d) => d.spend)));
-
-  const mapX = (x) => pad + ((x - minX) / (maxX - minX)) * (w - pad * 2);
-  const mapY = (y) => h - pad - ((y - minY) / (maxY - minY)) * (h - pad * 1.6); // reduced bottom buffer
-
-  const axisColor = COLORS.border;
-  const tickColor = COLORS.muted;
-
-  function handleMove(e, customer) {
-    onHover({ x: e.clientX, y: e.clientY, customer });
-  }
-  function clearHover() {
-    onHover(null);
-  }
-
-  return (
-    <div
-      style={{
-        background: COLORS.panel,
-        color: COLORS.text,
-        border: `1px solid ${COLORS.border}`,
-        borderRadius: 12,
-        padding: 20,
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-      }}
-    >
-      {/* Integrated Controls */}
-      <div style={controlsRow}>
-        <div>
-          <div style={label}>Clusters (K)</div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input
-              type="range"
-              min={2}
-              max={5}
-              step={1}
-              value={k}
-              onChange={(e) => {
-                const next = +e.target.value;
-                setSelected(Math.min(selected, next - 1));
-                setK(next);
+          {selectedStateName && (
+            <button
+              onClick={() => setSelectedStateName(null)}
+              style={{
+                position: "absolute",
+                top: 10,
+                right: 12,
+                background: THEME.panel,
+                color: THEME.text,
+                border: `1px solid ${THEME.border}`,
+                borderRadius: 8,
+                padding: "4px 8px",
+                fontSize: 12,
+                cursor: "pointer",
               }}
-              style={{ width: "100%", accentColor: COLORS.accent }}
-            />
-            <strong>{k}</strong>
-          </div>
-        </div>
-        <div>
-          <div style={label}>Noise (spread)</div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={noise}
-              onChange={(e) => setNoise(+e.target.value)}
-              style={{ width: "100%", accentColor: COLORS.accent }}
-            />
-            <strong>{noise.toFixed(2)}</strong>
-          </div>
-        </div>
-        <div>
-          <div style={label}>Point Size</div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input
-              type="range"
-              min={2}
-              max={6}
-              step={0.5}
-              value={ptSize}
-              onChange={(e) => setPtSize(+e.target.value)}
-              style={{ width: "100%", accentColor: COLORS.accent }}
-            />
-            <strong>{ptSize.toFixed(1)}</strong>
-          </div>
-        </div>
-        <div>
-          <div style={label}>Focus Selected Cluster</div>
-          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <input
-              type="checkbox"
-              checked={focusOnly}
-              onChange={(e) => setFocusOnly(e.target.checked)}
-            />
-            <span>Show only selected</span>
-          </label>
-        </div>
-      </div>
-
-      {/* Chart */}
-      <svg
-        ref={svgRef}
-        width="100%"
-        viewBox={`0 0 ${w} ${h}`}
-        onMouseLeave={clearHover}
-        role="img"
-        style={{ display: "block" }}
-      >
-        {/* Axes */}
-        <line
-          x1={pad}
-          y1={h - pad}
-          x2={w - pad}
-          y2={h - pad}
-          stroke={axisColor}
-        />
-        <line x1={pad} y1={pad} x2={pad} y2={h - pad} stroke={axisColor} />
-
-        {/* X ticks */}
-        {Array.from({ length: 5 }).map((_, i) => {
-          const t = i / 4;
-          const x = pad + t * (w - pad * 2);
-          const y = h - pad;
-          const xv = minX + t * (maxX - minX);
-          return (
-            <g key={`xt-${i}`}>
-              <line x1={x} y1={y} x2={x} y2={y + 4} stroke={axisColor} />
-              <text
-                x={x}
-                y={y + 14}
-                fontSize="9"
-                textAnchor="middle"
-                fill={tickColor}
-              >
-                {xv.toFixed(0)}
-              </text>
-            </g>
-          );
-        })}
-        {/* Y ticks */}
-        {Array.from({ length: 5 }).map((_, i) => {
-          const t = i / 4;
-          const y = h - pad - t * (h - pad * 2);
-          const yv = minY + t * (maxY - minY);
-          return (
-            <g key={`yt-${i}`}>
-              <line x1={pad - 4} y1={y} x2={pad} y2={y} stroke={axisColor} />
-              <text
-                x={pad - 8}
-                y={y + 3}
-                fontSize="9"
-                textAnchor="end"
-                fill={tickColor}
-              >
-                ${formatK(yv)}
-              </text>
-            </g>
-          );
-        })}
-
-        {/* Centers */}
-        {centers.slice(0, k).map((c, i) => {
-          const color = CLUSTER_COLORS[i % CLUSTER_COLORS.length];
-          const active = i === selected;
-          return (
-            <g
-              key={`c-${i}`}
-              onClick={() => setSelected(i)}
-              style={{ cursor: "pointer" }}
+              title="Clear state filter"
             >
-              <circle
-                cx={mapX(c.engagement)}
-                cy={mapY(c.spend)}
-                r={8}
-                fill={color}
-                opacity={active ? 0.95 : 0.6}
-                stroke={COLORS.panel}
-                strokeWidth="1.5"
-              />
-              <text
-                x={mapX(c.engagement) + 10}
-                y={mapY(c.spend) + 4}
-                fontSize="11"
-                fill={COLORS.text}
-              >
-                C{i + 1}
-              </text>
-            </g>
-          );
-        })}
+              Clear
+            </button>
+          )}
 
-        {/* Points */}
-        {data.map((d) => {
-          const color = CLUSTER_COLORS[d.cluster % CLUSTER_COLORS.length];
-          const dim = focusOnly && d.cluster !== selected;
-          return (
-            <circle
-              key={d.id}
-              cx={mapX(d.engagement)}
-              cy={mapY(d.spend)}
-              r={ptSize}
-              fill={color}
-              opacity={dim ? 0.25 : 0.65}
-              onMouseMove={(e) => handleMove(e, d)}
-              onMouseDown={() => setSelected(d.cluster)}
-              style={{ cursor: "pointer" }}
-            />
-          );
-        })}
-      </svg>
-    </div>
-  );
-}
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>Geographic map</div>
 
-/* -------------------- Radar Chart -------------------- */
+          <div
+            style={{
+              flex: 1,
+              borderRadius: 8,
+              overflow: "hidden",
+              minHeight: 0,
+            }}
+          >
+            <ComposableMap
+              projection="geoAlbersUsa"
+              style={{ width: "100%", height: "100%" }}
+            >
+              <Geographies geography={US_TOPO}>
+                {({ geographies }) =>
+                  geographies.map((geo) => {
+                    const name = geo.properties.name;
 
-function RadarCompare({
-  COLORS,
-  metrics,
-  overall,
-  selectedAgg,
-  selectedColor,
-}) {
-  const w = 360,
-    h = 300,
-    cx = w / 2,
-    cy = h / 2,
-    r = 130;
-  const rings = 4;
+                    const pct = stateAgg.pcts.get(name) || 0;
+                    const t =
+                      stateAgg.maxPct > 0
+                        ? Math.min(1, pct / stateAgg.maxPct)
+                        : 0;
 
-  const keys = metrics.map((m) => m.key);
-  const angles = keys.map(
-    (_, i) => (Math.PI * 2 * i) / keys.length - Math.PI / 2
-  );
+                    const isSelected = selectedStateName === name;
+                    const baseFill = blendHex(THEME.panel, THEME.accent, t);
+                    const fill = isSelected
+                      ? blendHex(baseFill, "#ffffff", 0.25)
+                      : baseFill;
+                    const stroke = isSelected ? THEME.accent : THEME.border;
+                    const strokeWidth = isSelected ? 2 : 0.75;
 
-  // normalize 0..1 per metric using overall min/max
-  const norm = {};
-  keys.forEach((k) => {
-    const lo = overall.min[k];
-    const hi = overall.max[k] === lo ? lo + 1 : overall.max[k];
-    norm[k] = (v) => (v - lo) / (hi - lo);
-  });
-
-  const selPoints = keys.map((k, i) => {
-    const t = norm[k](selectedAgg.avg[k]);
-    return polar(cx, cy, r * clamp01(t), angles[i]);
-  });
-  const allPoints = keys.map((k, i) => {
-    const t = norm[k](overall.avg[k]);
-    return polar(cx, cy, r * clamp01(t), angles[i]);
-  });
-
-  return (
-    <div
-      style={{
-        background: COLORS.panel,
-        color: COLORS.text,
-        border: `1px solid ${COLORS.border}`,
-        borderRadius: 12,
-        padding: 12,
-      }}
-    >
-      <div style={{ color: COLORS.muted, marginBottom: 30 }}>
-        Traits radar — <strong style={{ color: selectedColor }}>Cluster</strong>{" "}
-        vs Overall
-      </div>
-      <svg width="100%" viewBox={`0 0 ${w} ${h}`} role="img">
-        {range(rings).map((i) => {
-          const rr = (r * (i + 1)) / rings;
-          return (
-            <circle
-              key={i}
-              cx={cx}
-              cy={cy}
-              r={rr}
-              fill="none"
-              stroke={COLORS.border}
-            />
-          );
-        })}
-        {angles.map((a, i) => {
-          const { x, y } = polar(cx, cy, r, a);
-          return (
-            <g key={`spoke-${i}`}>
-              <line x1={cx} y1={cy} x2={x} y2={y} stroke={COLORS.border} />
-              <text
-                x={x}
-                y={y}
-                fontSize="8"
-                textAnchor={x < cx ? "end" : x > cx ? "start" : "middle"}
-                dominantBaseline={
-                  y < cy ? "text-after-edge" : "text-before-edge"
+                    return (
+                      <Geography
+                        key={geo.rsmKey}
+                        geography={geo}
+                        onClick={() => setSelectedStateName(name)}
+                        onMouseEnter={() =>
+                          setHoverState({
+                            name,
+                            pct,
+                            count: stateAgg.counts.get(name) || 0,
+                          })
+                        }
+                        onMouseLeave={() => setHoverState(null)}
+                        style={{
+                          default: {
+                            fill,
+                            stroke,
+                            strokeWidth,
+                            outline: "none",
+                            cursor: "pointer",
+                          },
+                          hover: {
+                            fill: blendHex(fill, "#ffffff", 0.15),
+                            stroke,
+                            strokeWidth: Math.max(1, strokeWidth),
+                            outline: "none",
+                            cursor: "pointer",
+                          },
+                          pressed: {
+                            fill,
+                            stroke,
+                            strokeWidth: Math.max(1, strokeWidth),
+                            outline: "none",
+                          },
+                        }}
+                      />
+                    );
+                  })
                 }
-                fill={COLORS.muted}
-                style={{ pointerEvents: "none" }}
-              >
-                {METRICS[i].label}
-              </text>
-            </g>
-          );
-        })}
-        <path
-          d={polygonPath(allPoints)}
-          fill={COLORS.text}
-          opacity="0.15"
-          stroke={COLORS.text}
-          strokeOpacity="0.35"
-        />
-        <path
-          d={polygonPath(selPoints)}
-          fill={selectedColor}
-          opacity="0.25"
-          stroke={selectedColor}
-          strokeWidth="2"
-        />
-        <circle cx={cx} cy={cy} r="2" fill={COLORS.text} opacity="0.6" />
-      </svg>
-      <div style={{ display: "flex", gap: 12, marginTop: 8, fontSize: 12 }}>
-        <LegendSwatch color={selectedColor} label="Cluster avg" />
-        <LegendSwatch color={COLORS.text} label="Overall avg" muted />
-      </div>
-    </div>
-  );
-}
+              </Geographies>
+            </ComposableMap>
+          </div>
 
-/* -------------------- Price Line over Ranges (smoothed + shaded area) -------------------- */
-
-function PriceLineOverRanges({ COLORS, series }) {
-  const w = 560,
-    h = 300,
-    pad = 36;
-
-  const xs = series.map((d) => d.x);
-  const ys = series.map((d) => d.y);
-  const minX = Math.min(...xs),
-    maxX = Math.max(...xs);
-  const minY = 0,
-    maxY = Math.max(1, Math.max(...ys));
-
-  const mapX = (x) => pad + ((x - minX) / (maxX - minX)) * (w - pad * 2);
-  const mapY = (y) => h - pad - ((y - minY) / (maxY - minY)) * (h - pad * 2);
-
-  // Build smooth curve path (cubic Bézier)
-  const lineD = series
-    .map((d, i, arr) => {
-      const x = mapX(d.x);
-      const y = mapY(d.y);
-      if (i === 0) return `M${x},${y}`;
-      const prev = arr[i - 1];
-      const prevX = mapX(prev.x);
-      const prevY = mapY(prev.y);
-      const midX = (prevX + x) / 2;
-      return `C${midX},${prevY} ${midX},${y} ${x},${y}`;
-    })
-    .join(" ");
-
-  // Area under curve down to baseline (minY)
-  const y0 = mapY(minY);
-  const firstX = mapX(series[0].x);
-  const lastX = mapX(series[series.length - 1].x);
-
-  const areaD =
-    `M${firstX},${y0} ` + lineD.replace(/^M/, "L") + ` L${lastX},${y0} Z`;
-
-  const strokeColor = "#FF5432";
-  const fillColor = "#FF5432";
-
-  return (
-    <div
-      style={{
-        background: COLORS.panel,
-        color: COLORS.text,
-        border: `1px solid ${COLORS.border}`,
-        borderRadius: 12,
-        padding: 12,
-      }}
-    >
-      <div style={{ color: COLORS.muted, marginBottom: 8 }}>
-        Transaction Price
-      </div>
-      <svg width="100%" viewBox={`0 0 ${w} ${h}`} role="img">
-        {/* Axes */}
-        <line
-          x1={pad}
-          y1={h - pad}
-          x2={w - pad}
-          y2={h - pad}
-          stroke={COLORS.border}
-        />
-        <line x1={pad} y1={pad} x2={pad} y2={h - pad} stroke={COLORS.border} />
-
-        {/* X-axis ticks */}
-        {series.map((d, i) => (
-          <g key={`xt-${i}`}>
-            <line
-              x1={mapX(d.x)}
-              y1={h - pad}
-              x2={mapX(d.x)}
-              y2={h - pad + 4}
-              stroke={COLORS.border}
-            />
-            <text
-              x={mapX(d.x)}
-              y={h - pad + 16}
-              fontSize="9"
-              textAnchor="middle"
-              fill={COLORS.muted}
-            >
-              ${d.binLabel}
-            </text>
-          </g>
-        ))}
-
-        {/* Y-axis ticks */}
-        {Array.from({ length: 4 }).map((_, i) => {
-          const t = i / 3;
-          const yv = minY + t * (maxY - minY);
-          const y = mapY(yv);
-          return (
-            <g key={`yt-${i}`}>
-              <line
-                x1={pad - 4}
-                y1={y}
-                x2={pad}
-                y2={y}
-                stroke={COLORS.border}
-              />
-              <text
-                x={pad - 8}
-                y={y + 3}
-                fontSize="9"
-                textAnchor="end"
-                fill={COLORS.muted}
-              >
-                {Math.round(yv)}
-              </text>
-            </g>
-          );
-        })}
-
-        {/* Shaded area under curve */}
-        <path d={areaD} fill={fillColor} opacity="0.12" />
-
-        {/* Smoothed line */}
-        <path
-          d={lineD}
-          fill="none"
-          stroke={strokeColor}
-          strokeWidth="2"
-          strokeLinejoin="round"
-          strokeLinecap="round"
-        />
-      </svg>
-
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          color: COLORS.muted,
-          fontSize: 11,
-          marginTop: 8,
-        }}
-      ></div>
-    </div>
-  );
-}
-
-/* -------------------- Linear Algebra Helpers -------------------- */
-
-// Matrix transpose
-function transpose(mat) {
-  const R = mat.length,
-    C = mat[0]?.length || 0;
-  const out = Array.from({ length: C }, () => Array(R));
-  for (let i = 0; i < R; i++) {
-    for (let j = 0; j < C; j++) out[j][i] = mat[i][j];
-  }
-  return out;
-}
-
-// Matrix multiply (A: R×K, B: K×C)
-function mulMat(A, B) {
-  const R = A.length,
-    K = A[0].length,
-    C = B[0].length;
-  const out = Array.from({ length: R }, () => Array(C).fill(0));
-  for (let i = 0; i < R; i++) {
-    for (let j = 0; j < C; j++) {
-      let sum = 0;
-      for (let k = 0; k < K; k++) sum += A[i][k] * B[k][j];
-      out[i][j] = sum;
-    }
-  }
-  return out;
-}
-
-// Compute top-2 eigenpairs of a symmetric matrix using power iteration
-function top2Eigen(M) {
-  const n = M.length;
-  function norm(v) {
-    const s = Math.sqrt(v.reduce((a, b) => a + b * b, 0));
-    return s ? v.map((x) => x / s) : v;
-  }
-  function dot(a, b) {
-    return a.reduce((s, x, i) => s + x * b[i], 0);
-  }
-  function mulMatVec(M, v) {
-    return M.map((row) => dot(row, v));
-  }
-
-  const eigVecs = [];
-  const eigVals = [];
-
-  let v = norm(Array.from({ length: n }, () => Math.random() - 0.5));
-  for (let it = 0; it < 100; it++) v = norm(mulMatVec(M, v));
-  const Av = mulMatVec(M, v);
-  let λ = dot(v, Av);
-  eigVecs.push(v);
-  eigVals.push(λ);
-
-  // Deflate
-  const M2 = M.map((row, i) => row.map((x, j) => x - λ * v[i] * v[j]));
-  let u = norm(Array.from({ length: n }, () => Math.random() - 0.5));
-  for (let it = 0; it < 100; it++) u = norm(mulMatVec(M2, u));
-  const Au = mulMatVec(M2, u);
-  let μ = dot(u, Au);
-  eigVecs.push(u);
-  eigVals.push(μ);
-
-  return { eigVecs: transpose(eigVecs), eigVals };
-}
-
-/* -------------------- Perception Map -------------------- */
-function PerceptionMap({ COLORS, data }) {
-  // Long-form rows: { model: "Rivian R1S", attribute: "Adventure", value: 12 }
-  const w = 560,
-    h = 300; // match PriceLineOverRanges height
-  const pad = 36;
-
-  const isDarkHex = (hex) => {
-    const h = hex?.replace("#", "");
-    if (!h || (h.length !== 6 && h.length !== 3)) return false;
-    const full =
-      h.length === 3
-        ? h
-            .split("")
-            .map((c) => c + c)
-            .join("")
-        : h;
-    const r = parseInt(full.slice(0, 2), 16);
-    const g = parseInt(full.slice(2, 4), 16);
-    const b = parseInt(full.slice(4, 6), 16);
-    const brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-    return brightness < 0.5;
-  };
-  const dark = isDarkHex(COLORS.panel);
-
-  // --- Guard: need >= 2 models and >= 2 attributes ---
-  const models = Array.from(new Set((data || []).map((d) => d.model)));
-  const attrs = Array.from(new Set((data || []).map((d) => d.attribute)));
-
-  if (!data || models.length < 2 || attrs.length < 2) {
-    return (
-      <div
-        style={{
-          background: COLORS.panel,
-          color: COLORS.text,
-          border: `1px solid ${COLORS.border}`,
-          borderRadius: 12,
-          padding: 12,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          height: h, // fixed to align with neighbor
-        }}
-      >
-        <div style={{ color: COLORS.muted, fontWeight: 600 }}>
-          Select at least 2 models and 2 attributes to display
+          <div
+            style={{
+              marginTop: 10,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <div style={{ fontSize: 12, opacity: 0.85 }}>
+              {hoverState
+                ? `${hoverState.name}: ${hoverState.pct.toFixed(1)}%${
+                    stateAgg.counts.get(hoverState.name) || 0
+                      ? ` (${(
+                          stateAgg.counts.get(hoverState.name) || 0
+                        ).toLocaleString()})`
+                      : ""
+                  }`
+                : selectedStateName
+                ? `Filtering Demographics to ${selectedStateName} • ${scopeRows.length.toLocaleString()} records`
+                : stateAgg.total > 0
+                ? `States shown: ${
+                    stateAgg.counts.size
+                  } • Records: ${stateAgg.total.toLocaleString()}`
+                : "No state data in current scope"}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }} />
+          </div>
         </div>
       </div>
-    );
-  }
-
-  // --- Build Model x Attribute matrix ---
-  const rIndex = new Map(models.map((m, i) => [m, i]));
-  const cIndex = new Map(attrs.map((a, j) => [a, j]));
-  const R = models.length,
-    C = attrs.length;
-
-  const M = Array.from({ length: R }, () => Array(C).fill(0));
-  for (const row of data) {
-    const i = rIndex.get(row.model);
-    const j = cIndex.get(row.attribute);
-    if (i != null && j != null) M[i][j] += Number(row.value) || 0;
-  }
-
-  // --- Correspondence Analysis (top 2 dims) ---
-  const total = M.flat().reduce((s, v) => s + v, 0) || 1;
-  const P = M.map((row) => row.map((v) => v / total));
-  const rMass = P.map((row) => row.reduce((s, v) => s + v, 0));
-  const cMass = Array.from({ length: C }, (_, j) =>
-    P.reduce((s, row) => s + row[j], 0)
-  );
-
-  // Centered & standardized residuals Z
-  const Z = Array.from({ length: R }, () => Array(C).fill(0));
-  for (let i = 0; i < R; i++) {
-    for (let j = 0; j < C; j++) {
-      const denom = Math.sqrt((rMass[i] || 1e-12) * (cMass[j] || 1e-12));
-      Z[i][j] = (P[i][j] - rMass[i] * cMass[j]) / (denom || 1e-12);
-    }
-  }
-
-  // Compute V (C×2) and singular values via eigen(Z'Z). Then U = Z V Σ^{-1}
-  const ZtZ = mulMat(transpose(Z), Z); // C×C
-  const { eigVecs: V2, eigVals: s2 } = top2Eigen(ZtZ); // V2 is C×2
-  const singVals = s2.map((x) => Math.sqrt(Math.max(0, x))); // Σ
-
-  // U = Z V Σ^{-1}  (R×2)
-  const Uapprox = mulMat(Z, V2);
-  const U = Uapprox.map((row) =>
-    row.map((v, k) => (singVals[k] > 1e-12 ? v / singVals[k] : 0))
-  );
-
-  // Row coords F = Dr^{-1/2} U Σ   (R×2)
-  const F = U.map((row, i) =>
-    row.map((v, k) => (singVals[k] * v) / Math.sqrt(rMass[i] || 1e-12))
-  );
-
-  // Fixed orientation: Col coords G = Dc^{-1/2} V Σ  (C×2)
-  const Grows = V2.map((row, j) => [
-    (singVals[0] * row[0]) / Math.sqrt(cMass[j] || 1e-12),
-    (singVals[1] * row[1]) / Math.sqrt(cMass[j] || 1e-12),
-  ]);
-
-  // Extract dims
-  const rowsXY = F.map(([x, y], i) => ({ x, y, label: models[i] }));
-  const colsXY = Grows.map(([x, y], j) => ({ x, y, label: attrs[j] }));
-
-  // Inflate if everything is at ~0,0
-  const allX = rowsXY.map((d) => d.x).concat(colsXY.map((d) => d.x));
-  const allY = rowsXY.map((d) => d.y).concat(colsXY.map((d) => d.y));
-  const sx = Math.max(1e-6, Math.max(...allX.map(Math.abs)));
-  const sy = Math.max(1e-6, Math.max(...allY.map(Math.abs)));
-  const inflate = sx < 1e-3 && sy < 1e-3 ? 50 : 1;
-  if (inflate !== 1) {
-    rowsXY.forEach((d) => {
-      d.x *= inflate;
-      d.y *= inflate;
-    });
-    colsXY.forEach((d) => {
-      d.x *= inflate;
-      d.y *= inflate;
-    });
-  }
-
-  // For each attribute, link to 3 closest models
-  const links = [];
-  for (const a of colsXY) {
-    const sorted = rowsXY
-      .map((m) => ({ m, d: Math.hypot(m.x - a.x, m.y - a.y) }))
-      .sort((p, q) => p.d - q.d)
-      .slice(0, 3);
-    for (const { m } of sorted)
-      links.push({ x1: m.x, y1: m.y, x2: a.x, y2: a.y });
-  }
-
-  // Axis limits + tighter padding for fuller use of space
-  const xs = rowsXY.map((d) => d.x).concat(colsXY.map((d) => d.x));
-  const ys = rowsXY.map((d) => d.y).concat(colsXY.map((d) => d.y));
-  let xMin = Math.min(...xs),
-    xMax = Math.max(...xs);
-  let yMin = Math.min(...ys),
-    yMax = Math.max(...ys);
-
-  const padFrac = 0.05;
-  const xPad = (xMax - xMin || 1) * padFrac;
-  const yPad = (yMax - yMin || 1) * padFrac;
-  xMin -= xPad;
-  xMax += xPad;
-  yMin -= yPad;
-  yMax += yPad;
-
-  const eps = 1e-6;
-  if (Math.abs(xMax - xMin) < eps) {
-    xMin -= 0.5;
-    xMax += 0.5;
-  }
-  if (Math.abs(yMax - yMin) < eps) {
-    yMin -= 0.5;
-    yMax += 0.5;
-  }
-
-  const innerPad = 18; // tight internal padding
-  const offset = (Math.max(Math.abs(yMin), Math.abs(yMax)) || 1) * 0.04;
-
-  const mapX = (x) =>
-    innerPad + ((x - xMin) / (xMax - xMin || 1)) * (w - innerPad * 2);
-  const mapY = (y) =>
-    h - innerPad - ((y - yMin) / (yMax - yMin || 1)) * (h - innerPad * 2);
-
-  const axisColor = dark ? "rgba(255,255,255,0.35)" : "#11232F";
-  const modelColor = dark ? "#EAEAEA" : "#0b1220";
-  const attrColor = "#FF5432";
-
-  return (
-    <div
-      style={{
-        background: COLORS.panel,
-        color: COLORS.text,
-        border: `1px solid ${COLORS.border}`,
-        borderRadius: 12,
-        padding: 12,
-        // No minHeight/height/flex here — lets the grid define the height
-      }}
-    >
-      <div style={{ color: COLORS.muted, marginBottom: 8 }}>
-        Perception Map (Correspondence Analysis)
-      </div>
-
-      <svg
-        width="100%"
-        height={h} // fixed height to align with neighbor
-        viewBox={`0 0 ${w} ${h}`}
-        preserveAspectRatio="xMidYMid meet" // uniform scaling
-        role="img"
-        style={{ display: "block" }}
-      >
-        {/* Axes at origin */}
-        <line
-          x1={mapX(0)}
-          y1={innerPad}
-          x2={mapX(0)}
-          y2={h - innerPad}
-          stroke={axisColor}
-        />
-        <line
-          x1={innerPad}
-          y1={mapY(0)}
-          x2={w - innerPad}
-          y2={mapY(0)}
-          stroke={axisColor}
-        />
-
-        {/* Links (only closest 3) */}
-        {links.map((ln, i) => (
-          <line
-            key={`ln-${i}`}
-            x1={mapX(ln.x1)}
-            y1={mapY(ln.y1)}
-            x2={mapX(ln.x2)}
-            y2={mapY(ln.y2)}
-            stroke={dark ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.35)"}
-            strokeWidth="1"
-            opacity="0.7"
-          />
-        ))}
-
-        {/* Model points + labels */}
-        {rowsXY.map((d, i) => (
-          <g key={`m-${i}`}>
-            <circle cx={mapX(d.x)} cy={mapY(d.y)} r="4" fill={modelColor} />
-            <text
-              x={mapX(d.x)}
-              y={mapY(d.y - offset)}
-              fontSize="11"
-              textAnchor="middle"
-              fill={COLORS.text}
-              style={{ fontWeight: 700 }}
-            >
-              {d.label}
-            </text>
-          </g>
-        ))}
-
-        {/* Attribute points + labels */}
-        {colsXY.map((d, i) => (
-          <g key={`a-${i}`}>
-            <circle cx={mapX(d.x)} cy={mapY(d.y)} r="4" fill={attrColor} />
-            <text
-              x={mapX(d.x)}
-              y={mapY(d.y - offset)}
-              fontSize="11"
-              textAnchor="middle"
-              fill={attrColor}
-              style={{ fontWeight: 700 }}
-            >
-              {d.label}
-            </text>
-          </g>
-        ))}
-      </svg>
     </div>
   );
-}
-
-/* -------------------- US Bubble Map (simple) -------------------- */
-
-function USBubbleMap({ COLORS, bubbles }) {
-  // Simple equirectangular-ish projection into a fixed box (not a drawn basemap).
-  const w = 940,
-    h = 420,
-    pad = 24;
-
-  // Approx lower48 bounds: lon ~ [-125, -66], lat ~ [25, 49]
-  const lonMin = -125,
-    lonMax = -66;
-  const latMin = 25,
-    latMax = 49;
-
-  const projX = (lon) =>
-    pad + ((lon - lonMin) / (lonMax - lonMin)) * (w - pad * 2);
-  const projY = (lat) =>
-    pad + (1 - (lat - latMin) / (latMax - latMin)) * (h - pad * 2);
-
-  // sizing
-  const pops = bubbles.map((b) => b.pop);
-  const minR = 4,
-    maxR = 24;
-  const minPop = Math.min(...pops),
-    maxPop = Math.max(...pops);
-  const scaleR = (v) =>
-    minPop === maxPop
-      ? (minR + maxR) / 2
-      : minR + ((v - minPop) / (maxPop - minPop)) * (maxR - minR);
-
-  // Basemap styling
-  const landFill = COLORS.text; // reuse text color w/ low opacity for a subtle land tone
-  const gridStroke = COLORS.border;
-
-  return (
-    <div
-      style={{
-        background: COLORS.panel,
-        color: COLORS.text,
-        border: `1px solid ${COLORS.border}`,
-        borderRadius: 12,
-        padding: 12,
-      }}
-    >
-      <div style={{ color: COLORS.muted, marginBottom: 8 }}>
-        US Bubble Map — sample distribution
-      </div>
-      <svg width="100%" viewBox={`0 0 ${w} ${h}`} role="img">
-        {/* Land panel */}
-        <rect
-          x={pad}
-          y={pad}
-          width={w - pad * 2}
-          height={h - pad * 2}
-          fill={landFill}
-          fillOpacity="0.05"
-          stroke={gridStroke}
-        />
-
-        {/* Graticule */}
-        {Array.from({ length: 6 }).map((_, i) => {
-          const t = i / 5;
-          const x = pad + t * (w - pad * 2);
-          return (
-            <line
-              key={`lon-${i}`}
-              x1={x}
-              y1={pad}
-              x2={x}
-              y2={h - pad}
-              stroke={gridStroke}
-              opacity="0.4"
-              strokeDasharray="2 4"
-            />
-          );
-        })}
-        {Array.from({ length: 6 }).map((_, i) => {
-          const t = i / 5;
-          const y = pad + t * (h - pad * 2);
-          return (
-            <line
-              key={`lat-${i}`}
-              x1={pad}
-              y1={y}
-              x2={w - pad}
-              y2={y}
-              stroke={gridStroke}
-              opacity="0.4"
-              strokeDasharray="2 4"
-            />
-          );
-        })}
-
-        {/* Bubbles */}
-        {bubbles.map((b, i) => (
-          <g key={i}>
-            <circle
-              cx={projX(b.lon)}
-              cy={projY(b.lat)}
-              r={scaleR(b.pop)}
-              fill="#0CA5E1"
-              opacity="0.35"
-              stroke="#0CA5E1"
-              strokeWidth="1"
-            />
-            <text
-              x={projX(b.lon)}
-              y={projY(b.lat) - scaleR(b.pop) - 6}
-              fontSize="11"
-              textAnchor="middle"
-              fill={COLORS.text}
-            >
-              {b.city}
-            </text>
-          </g>
-        ))}
-      </svg>
-
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          color: COLORS.muted,
-          fontSize: 11,
-          marginTop: 8,
-        }}
-      ></div>
-    </div>
-  );
-}
-
-/* -------------------- Shared bits -------------------- */
-
-function LegendSwatch({ color, label, muted }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        color: muted ? "#A7B1B6" : "inherit",
-      }}
-    >
-      <span
-        style={{
-          width: 12,
-          height: 12,
-          borderRadius: 2,
-          background: color,
-          display: "inline-block",
-        }}
-      />
-      <span>{label}</span>
-    </div>
-  );
-}
-
-/* -------------------- Data generation & math -------------------- */
-
-function makeCustomers(k, noise) {
-  const N = 800; // total customers
-  // centers
-  const baseCenters = [
-    {
-      price_sensitivity: 70,
-      loyalty: 30,
-      engagement: 45,
-      spend: 250,
-      support: 6,
-      nps: 20,
-    },
-    {
-      price_sensitivity: 35,
-      loyalty: 60,
-      engagement: 65,
-      spend: 520,
-      support: 3,
-      nps: 45,
-    },
-    {
-      price_sensitivity: 20,
-      loyalty: 80,
-      engagement: 85,
-      spend: 900,
-      support: 1,
-      nps: 70,
-    },
-    {
-      price_sensitivity: 55,
-      loyalty: 45,
-      engagement: 30,
-      spend: 300,
-      support: 5,
-      nps: 10,
-    },
-    {
-      price_sensitivity: 85,
-      loyalty: 20,
-      engagement: 70,
-      spend: 420,
-      support: 8,
-      nps: -5,
-    },
-  ];
-
-  const centers = baseCenters.slice(0, k).map((c, i) => ({ ...c, id: i }));
-
-  const customers = [];
-  for (let i = 0; i < N; i++) {
-    const cluster = i % k;
-    const c = centers[cluster];
-    const jitter = (m, scale = 1) =>
-      clamp01(m + (randn() * 15 + randn() * 5) * noise * scale);
-    const spendJ = Math.max(
-      20,
-      c.spend + (randn() * 180 + randn() * 60) * noise
-    );
-    const engagement = clamp(0, 100, c.engagement + randn() * 12 * noise);
-    const nps = clamp(-100, 100, c.nps + randn() * 18 * noise);
-
-    customers.push({
-      id: i + 1,
-      cluster,
-      price_sensitivity: jitter(c.price_sensitivity),
-      loyalty: jitter(c.loyalty),
-      engagement,
-      spend: spendJ,
-      support: clamp(0, 10, c.support + randn() * 2 * noise),
-      nps,
-    });
-  }
-
-  return { customers, centers };
-}
-
-function summarize(rows) {
-  const size = rows.length;
-  const sums = {};
-  const mins = {};
-  const maxs = {};
-  for (const key of [
-    "price_sensitivity",
-    "loyalty",
-    "engagement",
-    "spend",
-    "support",
-    "nps",
-  ]) {
-    sums[key] = 0;
-    mins[key] = Infinity;
-    maxs[key] = -Infinity;
-  }
-  for (const r of rows) {
-    for (const key in sums) {
-      const v = r[key];
-      sums[key] += v;
-      if (v < mins[key]) mins[key] = v;
-      if (v > maxs[key]) maxs[key] = v;
-    }
-  }
-  const avg = {};
-  for (const key in sums) avg[key] = size ? sums[key] / size : 0;
-  const min = mins;
-  const max = maxs;
-  return { size, avg, min, max };
-}
-
-/* ---- Row 2 helpers ---- */
-
-function buildPriceBins(customers) {
-  // Bin spend into $0–1000 by $100, return midpoints + counts
-  const binSize = 100;
-  const bins = [];
-  for (let start = 0; start <= 900; start += binSize) {
-    const end = start + binSize;
-    const mid = start + binSize / 2;
-    const count = customers.filter(
-      (c) => c.spend >= start && c.spend < end
-    ).length;
-    bins.push({ binLabel: `${start}-${end}`, x: mid, y: count });
-  }
-  // Add 1000+ tail
-  const tail = customers.filter((c) => c.spend >= 1000).length;
-  bins.push({ binLabel: "1000+", x: 1050, y: tail });
-  return bins;
-}
-
-function makePerceptionPoints() {
-  // Demo perception dots
-  return [
-    { label: "Value-Seeking", x: 30, y: 40, color: "#22C55E" },
-    { label: "Tech-forward", x: 70, y: 65, color: "#0CA5E1" },
-    { label: "Adventure", x: 60, y: 30, color: "#FF5432" },
-    { label: "Luxury", x: 75, y: 85, color: "#8B5CF6" },
-    { label: "Practical", x: 40, y: 70, color: "#F59E0B" },
-  ];
-}
-
-/* ---- Row 3 helpers ---- */
-
-function makeUSBubbleData() {
-  // A few sample cities (lat, lon) and demo populations
-  return [
-    { city: "Seattle", lat: 47.61, lon: -122.33, pop: 750_000 },
-    { city: "SF Bay", lat: 37.77, lon: -122.42, pop: 1_500_000 },
-    { city: "LA", lat: 34.05, lon: -118.24, pop: 3_800_000 },
-    { city: "Denver", lat: 39.74, lon: -104.99, pop: 715_000 },
-    { city: "Dallas", lat: 32.78, lon: -96.8, pop: 1_300_000 },
-    { city: "Chicago", lat: 41.88, lon: -87.63, pop: 2_700_000 },
-    { city: "Atlanta", lat: 33.75, lon: -84.39, pop: 500_000 },
-    { city: "Miami", lat: 25.76, lon: -80.19, pop: 440_000 },
-    { city: "NYC", lat: 40.71, lon: -74.01, pop: 8_500_000 },
-    { city: "DC", lat: 38.91, lon: -77.04, pop: 700_000 },
-  ];
-}
-
-/* -------------------- Small helpers -------------------- */
-
-function formatK(v) {
-  if (v >= 1000) return (v / 1000).toFixed(0) + "k";
-  return v.toFixed(0);
-}
-function range(n) {
-  return Array.from({ length: n }, (_, i) => i);
-}
-function polar(cx, cy, r, angle) {
-  return { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
-}
-function polygonPath(points) {
-  if (!points.length) return "";
-  return (
-    points.map((p, i) => (i ? `L${p.x},${p.y}` : `M${p.x},${p.y}`)).join(" ") +
-    "Z"
-  );
-}
-function clamp01(v) {
-  return Math.max(0, Math.min(100, v));
-}
-function clamp(lo, hi, v) {
-  return Math.max(lo, Math.min(hi, v));
-}
-function randn() {
-  // Box–Muller
-  let u = 0,
-    v = 0;
-  while (u === 0) u = Math.random();
-  while (v === 0) v = Math.random();
-  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
 }

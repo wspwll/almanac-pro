@@ -11,6 +11,23 @@ import {
   Activity,
 } from "lucide-react";
 
+import {
+  ResponsiveContainer,
+  ScatterChart,
+  Scatter,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  AreaChart,
+  Area,
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+} from "recharts";
+
 export default function Welcome({ COLORS, useStyles }) {
   const styles = useStyles(COLORS);
 
