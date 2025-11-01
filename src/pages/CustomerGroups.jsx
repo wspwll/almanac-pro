@@ -10,14 +10,15 @@ import {
   Line,
   AreaChart,
   Area,
+  Cell,
 } from "recharts";
 import suvPoints from "./data/suv_points.json";
 import puPoints from "./data/pu_points.json";
 import demosMapping from "./data/demos-mapping.json";
 import codeToTextMapRaw from "./data/code-to-text-map.json";
 import { ComposableMap, Geographies, Geography } from "react-simple-maps";
+import { Lock, Unlock } from "lucide-react";
 
-/* ---- Local series palette (renamed to avoid clashing with THEME.COLORS) ---- */
 const SERIES_COLORS = [
   "#1F77B4",
   "#FF7F0E",
@@ -35,6 +36,16 @@ const SERIES_COLORS = [
   "#22C55E",
   "#3B82F6",
 ];
+
+const FIXED_CLUSTER_COLORS = {
+  1: "#1F77B4", // C1 blue
+  2: "#FF7F0E", // C2 orange
+  3: "#2CA02C", // C3 green
+  4: "#D62728", // C4 red
+};
+const clusterColor = (k) =>
+  FIXED_CLUSTER_COLORS[k] ??
+  SERIES_COLORS[(Number(k) - 1 + SERIES_COLORS.length) % SERIES_COLORS.length];
 
 const US_TOPO = "https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json";
 
@@ -103,24 +114,19 @@ const LAYOUT = {
 function toStateName(labelRaw) {
   if (!labelRaw) return null;
   const s = String(labelRaw).trim();
-
   const up = s.toUpperCase();
   if (US_STATE_ABBR_TO_NAME[up]) return US_STATE_ABBR_TO_NAME[up];
-
   const lower = s.toLowerCase();
   for (const name of US_STATE_NAME_SET) {
     if (name.toLowerCase() === lower) return name;
   }
-
   const two = (s.match(/\b[A-Z]{2}\b/g) || []).find(
     (tok) => US_STATE_ABBR_TO_NAME[tok.toUpperCase()]
   );
   if (two) return US_STATE_ABBR_TO_NAME[two.toUpperCase()];
-
   return null;
 }
 
-/* ---------- color helpers ---------- */
 const hexToRgbStr = (hex) => {
   const h = hex.replace("#", "");
   const full =
@@ -185,12 +191,11 @@ function blendHex(aHex, bHex, t) {
   });
 }
 
-// --- deterministic "random" color per model (stable across renders) ---
 function hashStr(s) {
   let h = 0;
   for (let i = 0; i < s.length; i++) {
     h = (h << 5) - h + s.charCodeAt(i);
-    h |= 0; // keep 32-bit
+    h |= 0;
   }
   return Math.abs(h);
 }
@@ -201,7 +206,6 @@ function colorForKey(key, allKeys) {
   return SERIES_COLORS[(idx >= 0 ? idx : 0) % SERIES_COLORS.length];
 }
 
-/* ---------- chart helpers ---------- */
 function CentroidDot({ cx, cy, payload, onClick, THEME }) {
   const accent = THEME.accent;
   const ringFill = `${THEME.accent}22`;
@@ -209,10 +213,7 @@ function CentroidDot({ cx, cy, payload, onClick, THEME }) {
 
   return (
     <g transform={`translate(${cx}, ${cy})`} style={{ cursor: "pointer" }}>
-      {/* Big invisible hit area to make clicking easy */}
       <circle r={30} fill="transparent" onClick={() => onClick?.(payload)} />
-
-      {/* Outer ring with subtle glow */}
       <circle
         r={22}
         fill={ringFill}
@@ -221,11 +222,7 @@ function CentroidDot({ cx, cy, payload, onClick, THEME }) {
         filter="url(#centroidGlow)"
         onClick={() => onClick?.(payload)}
       />
-
-      {/* Inner core dot */}
       <circle r={6} fill={accent} onClick={() => onClick?.(payload)} />
-
-      {/* Outlined label (C1, C2, …) */}
       <text
         y={-16}
         textAnchor="middle"
@@ -256,7 +253,6 @@ function BigDot(props) {
   const { cx, cy, fill } = props;
   return <circle cx={cx} cy={cy} r={10} fill={fill} />;
 }
-
 function TinyDot({ cx, cy, fill }) {
   return <circle cx={cx} cy={cy} r={5} fill={fill} />;
 }
@@ -282,7 +278,6 @@ function tweenDomain(from, to, t) {
   return [f0 + (t0 - f0) * e, f1 + (t1 - f1) * e];
 }
 
-/* Keys we’ll scan for state-like values */
 const STATE_KEYS = [
   "ADMARK_STATE",
   "admark_state",
@@ -297,7 +292,6 @@ const STATE_KEYS = [
   "st",
 ];
 
-// --- Dummy persona content you can customize per cluster ---
 const PERSONA_BY_CLUSTER = {
   0: {
     title: "C0 • Practical Commuters",
@@ -332,7 +326,6 @@ const PERSONA_BY_CLUSTER = {
       "Channel: Visual storytelling with lifestyle imagery",
     ],
   },
-  // Fallback for any other cluster id:
   default: {
     title: "Cluster Persona",
     summary:
@@ -345,12 +338,10 @@ const PERSONA_BY_CLUSTER = {
     ],
   },
 };
-
 function getPersonaForCluster(id) {
   return PERSONA_BY_CLUSTER[id] ?? PERSONA_BY_CLUSTER.default;
 }
 
-/** ===== Field Groups for the right-side dropdown ===== */
 const FIELD_GROUPS = {
   Demographics: [
     "BLD_AGE_GRP",
@@ -363,7 +354,6 @@ const FIELD_GROUPS = {
     "DEMO_LOCATION",
     "DEMO_MARITAL",
     "DEMO_EMPLOY",
-    // "ADMARK_STATE", // ← removed per request
     "BLD_CHILDREN",
     "DEMO_EMPTY_NESTER",
   ],
@@ -378,7 +368,6 @@ const FIELD_GROUPS = {
     "C1_PL",
     "FIN_CREDIT",
   ],
-
   "Buying Behavior": ["PR_MOST", "C2S_MODEL_RESPONSE", "SRC_TOP1"],
   Loyalty: [
     "OL_MODEL_GRP",
@@ -419,7 +408,6 @@ const FIELD_GROUPS = {
   ],
 };
 
-/** ---------- Financing helpers (formatting + numeric detection) ---------- */
 function coerceNumber(v) {
   if (v === null || v === undefined) return NaN;
   const n = Number(String(v).trim().replace(/,/g, ""));
@@ -448,16 +436,15 @@ function formatFinValue(field, n) {
   return n.toLocaleString();
 }
 
-/* ---- fixed-bucket histogram for FIN_PRICE_UNEDITED ---- */
 function coercePrice(v) {
   if (v === null || v === undefined) return NaN;
   const n = Number(String(v).replace(/[$,]/g, "").trim());
   return Number.isFinite(n) ? n : NaN;
 }
 
-const BUCKET_MIN = 30000; // start of first 5k bucket
-const BUCKET_STEP = 5000; // 5k wide
-const OVER_MIN = 110000; // 110k+ catch-all
+const BUCKET_MIN = 30000;
+const BUCKET_STEP = 5000;
+const OVER_MIN = 110000;
 
 function fmtK(n) {
   return `$${Math.round(n / 1000)}k`;
@@ -465,17 +452,12 @@ function fmtK(n) {
 function fmtKDec(n) {
   return `$${(n / 1000).toFixed(1)}k`;
 }
-
 function bucketLabel(low, high) {
   if (low === -Infinity) return "Under $30k";
   if (high === Infinity) return "$110k+";
   const displayHigh = high - 100;
   return `${fmtK(low)} to ${fmtKDec(displayHigh)}`;
 }
-
-/**
- * Build fixed 5k buckets (Under $30k, $30k to $34.9k, ... $110k+)
- */
 function getFixedBucketRanges() {
   const ranges = [];
   ranges.push({
@@ -494,7 +476,6 @@ function getFixedBucketRanges() {
   });
   return ranges;
 }
-
 function buildBucketsForRows(rows) {
   const ranges = getFixedBucketRanges();
   const buckets = ranges.map((r) => ({ ...r, count: 0, pct: 0 }));
@@ -537,7 +518,6 @@ function buildBucketsForRows(rows) {
   return { data, totalValid };
 }
 
-/** Build series for AreaChart grouped by a key ('cluster' or 'model') */
 function buildPriceSeriesByGroup(rows, groupingKey, groupOrder) {
   const byGroup = new Map();
   for (const r of rows) {
@@ -555,7 +535,6 @@ function buildPriceSeriesByGroup(rows, groupingKey, groupOrder) {
   return series;
 }
 
-/* ---- Attitudes agree calc (policy-aligned) ---- */
 const AGREE_TOP3 = new Set(["strongly agree", "agree", "somewhat agree"]);
 const AGREE_TOP2 = new Set(["strongly agree", "somewhat agree"]);
 function normalizeStr(v) {
@@ -660,14 +639,11 @@ const chipFixedCG = (active, baseColor, panelColor, borderColor, textColor) => {
 };
 
 export default function CustomerGroups({ COLORS: THEME, useStyles }) {
-  // NEW: dataset mode — "CORE" (current SUV/Pickup) or "SEGMENTS" (placeholder)
   const [datasetMode, setDatasetMode] = useState("CORE");
-
   const [group, setGroup] = useState("SUV");
   const dataPoints =
-    datasetMode === "CORE" ? (group === "SUV" ? suvPoints : puPoints) : []; // SEGMENTS: no data yet
+    datasetMode === "CORE" ? (group === "SUV" ? suvPoints : puPoints) : [];
 
-  // Reset key view states when switching modes
   useEffect(() => {
     setZoomCluster(null);
     setCenterT(0);
@@ -675,7 +651,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
     setDemoModel(null);
   }, [datasetMode]);
 
-  // Normalize rows
   const rows = useMemo(() => {
     const out = [];
     for (const r of dataPoints || []) {
@@ -725,13 +700,11 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
   }, [allModels]);
 
   const [selectedModels, setSelectedModels] = useState(allModels);
-  const [colorMode, setColorMode] = useState("model"); // default to Model
+  const [colorMode, setColorMode] = useState("model");
   const [zoomCluster, setZoomCluster] = useState(null);
   const [centerT, setCenterT] = useState(0);
   const [selectedStateName, setSelectedStateName] = useState(null);
   const [showPersona, setShowPersona] = useState(false);
-
-  // Right-side category
   const [selectedFieldGroup, setSelectedFieldGroup] = useState("Demographics");
 
   useEffect(() => setSelectedModels(allModels), [allModels]);
@@ -747,7 +720,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
   const selectAll = () => setSelectedModels(allModels);
   const clearAll = () => setSelectedModels([]);
 
-  // --- LOOKUP TABLES (incl. ADMARK_STATE code → label) ---
   const demoLookups = useMemo(() => {
     const byField = new Map();
     for (const row of demosMapping || []) {
@@ -764,7 +736,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
     return byField;
   }, []);
 
-  // ---------- Variable display labels (code → friendly text) ----------
   const VAR_LABELS = useMemo(() => {
     const map = new Map();
     for (const row of codeToTextMapRaw || []) {
@@ -791,13 +762,8 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
     }
     return map;
   }, [codeToTextMapRaw]);
+  const varLabel = (code) => VAR_LABELS.get(String(code ?? "").trim()) || code;
 
-  function varLabel(code) {
-    const c = String(code ?? "").trim();
-    return VAR_LABELS.get(c) || c;
-  }
-
-  // Resolve full state name from row
   const getRowStateName = useMemo(() => {
     const codeMap = demoLookups.get("ADMARK_STATE") || new Map();
     return (row) => {
@@ -830,13 +796,11 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
     };
   }, [demoLookups]);
 
-  // Model filter ONLY (scatter not affected by state)
   const baseByModel = useMemo(() => {
     const active = selectedModels?.length ? selectedModels : allModels;
     return rows.filter((r) => active.includes(r.model));
   }, [rows, selectedModels, allModels]);
 
-  // Scatter frame (model + optional cluster zoom)
   const plotFrame = useMemo(
     () =>
       zoomCluster == null
@@ -845,7 +809,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
     [baseByModel, zoomCluster]
   );
 
-  // Demographics scope (model + optional cluster zoom + optional state)
   const scopeRows = useMemo(() => {
     const base =
       zoomCluster == null
@@ -868,7 +831,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
       setZoomCluster(null);
   }, [availableClusters, zoomCluster]);
 
-  // Centroids for collapsing
   const groupingKey = colorMode === "cluster" ? "cluster" : "model";
   const centroidsByGroup = useMemo(() => {
     const acc = new Map();
@@ -888,20 +850,17 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
 
   const plotDataCentered = useMemo(() => {
     if (centerT <= 0) return plotFrame;
-    const out = new Array(plotFrame.length);
-    for (let i = 0; i < plotFrame.length; i++) {
-      const r = plotFrame[i];
+    return plotFrame.map((r) => {
       const key = colorMode === "cluster" ? r.cluster : String(r.model);
       const c = centroidsByGroup.get(key);
-      out[i] = c
+      return c
         ? {
             ...r,
             emb_x: lerp(r.raw_x, c.cx, centerT),
             emb_y: lerp(r.raw_y, c.cy, centerT),
           }
         : r;
-    }
-    return out;
+    });
   }, [plotFrame, centroidsByGroup, centerT, colorMode]);
 
   const groupKeys = useMemo(() => {
@@ -934,11 +893,14 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
     if (demoModel && !modelsInScope.includes(demoModel)) setDemoModel(null);
   }, [modelsInScope, demoModel]);
 
-  // Attitudes selections (default to first in each group)
   const LOYALTY_VARS = FIELD_GROUPS.Loyalty;
   const WTP_VARS = FIELD_GROUPS["Willingness to Pay"];
   const [attXVar, setAttXVar] = useState(LOYALTY_VARS[0]);
   const [attYVar, setAttYVar] = useState(WTP_VARS[0]);
+
+  const [attLocked, setAttLocked] = useState(false);
+  const [priceLocked, setPriceLocked] = useState(false);
+  const [mapLocked, setMapLocked] = useState(false);
 
   const animToken = useAnimationToken([
     datasetMode,
@@ -950,23 +912,43 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
     demoModel ?? "all-models",
     attXVar,
     attYVar,
+    attLocked ? "attLOCK" : "attUNLOCK",
+    priceLocked ? "priceLOCK" : "priceUNLOCK",
+    mapLocked ? "mapLOCK" : "mapUNLOCK",
   ]);
 
-  // Attitudes points computed from current scopeRows (includes state filter)
-  const attitudesPoints = useMemo(() => {
-    const srcRows = demoModel
+  const attBaseRows = useMemo(() => {
+    if (attLocked) return rows;
+    return demoModel
       ? scopeRows.filter((r) => r.model === demoModel)
       : scopeRows;
+  }, [attLocked, rows, scopeRows, demoModel]);
+
+  const attGroupKeys = useMemo(() => {
+    const set = new Set(
+      attBaseRows.map((r) =>
+        colorMode === "cluster" ? r.cluster : String(r.model)
+      )
+    );
+    let arr = Array.from(set);
+    if (colorMode === "cluster") {
+      arr = arr.filter(Number.isFinite).sort((a, b) => a - b);
+    } else {
+      arr = arr.sort();
+    }
+    return arr;
+  }, [attBaseRows, colorMode]);
+
+  const attitudesPoints = useMemo(() => {
     const byGroup = new Map();
-    for (const r of srcRows) {
+    for (const r of attBaseRows) {
       const k = colorMode === "cluster" ? r.cluster : String(r.model);
       if (!byGroup.has(k)) byGroup.set(k, []);
       byGroup.get(k).push(r);
     }
 
-    const order = groupKeys; // keep consistent colors with scatter/price chart
     const pts = [];
-    for (const k of order) {
+    for (const k of attGroupKeys) {
       const rs = byGroup.get(k) || [];
       const x = percentAgreeMappedPolicy(rs, attXVar, demoLookups, {
         includeMissingInDenom: true,
@@ -975,44 +957,31 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
         includeMissingInDenom: true,
       });
       if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+
       pts.push({
         key: k,
         name: colorMode === "cluster" ? `C${k}` : String(k),
         x,
         y,
         n: rs.length,
-        color: colorForKey(k, order),
+        color:
+          colorMode === "model"
+            ? modelColors[String(k)] || THEME.accent
+            : clusterColor(Number(k)),
       });
     }
     return pts;
   }, [
-    scopeRows,
+    attBaseRows,
+    attGroupKeys,
     colorMode,
-    groupKeys,
     attXVar,
     attYVar,
     demoLookups,
-    demoModel,
+    modelColors,
+    THEME.accent,
   ]);
 
-  const clusterCentroidsForHotspots = useMemo(() => {
-    const byCluster = new Map();
-    for (const r of baseByModel) {
-      const k = r.cluster;
-      if (!byCluster.has(k)) byCluster.set(k, { sumX: 0, sumY: 0, n: 0 });
-      const s = byCluster.get(k);
-      s.sumX += r.emb_x;
-      s.sumY += r.emb_y;
-      s.n += 1;
-    }
-    return Array.from(byCluster.entries()).map(([cluster, s]) => ({
-      cluster,
-      emb_x: s.sumX / s.n,
-      emb_y: s.sumY / s.n,
-    }));
-  }, [baseByModel]);
-
-  // Axis tweening (based on plot frame)
   const targetX = useMemo(
     () => paddedDomain(plotFrame.map((r) => r.emb_x)),
     [plotFrame]
@@ -1047,7 +1016,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetX[0], targetX[1], targetY[0], targetY[1]]);
 
-  /* ---------------- Demographics (map context) ---------------- */
   const demoBaseRows = useMemo(() => {
     return zoomCluster == null
       ? baseByModel
@@ -1060,11 +1028,16 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
       : demoBaseRows;
   }, [demoBaseRows, demoModel]);
 
+  const mapSourceRows = useMemo(
+    () => (mapLocked ? rows : mapBaseRows),
+    [mapLocked, rows, mapBaseRows]
+  );
+
   const stateAgg = useMemo(() => {
     const counts = new Map();
     let total = 0;
 
-    for (const r of mapBaseRows) {
+    for (const r of mapSourceRows) {
       const name = getRowStateName(r);
       if (!name) continue;
       counts.set(name, (counts.get(name) || 0) + 1);
@@ -1083,26 +1056,22 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
     }
 
     return { counts, pcts, total, maxPct };
-  }, [mapBaseRows, getRowStateName]);
+  }, [mapSourceRows, getRowStateName]);
 
   const [hoverState, setHoverState] = useState(null);
 
-  /* ===== Summary builder restricted to selected field group ===== */
   const demoSummary = useMemo(() => {
     const sections = [];
-
     const fields = FIELD_GROUPS[selectedFieldGroup] || [];
     const srcAll = demoModel
       ? scopeRows.filter((r) => r.model === demoModel)
       : scopeRows;
 
-    // Financing fields that should ALWAYS be categorical
     const categoricalFinFields = new Set(["C1_PL", "FIN_CREDIT"]);
 
     for (const field of fields) {
       const codeMap = demoLookups.get(field) || new Map();
 
-      // Numeric aggregation for Financing fields not forced categorical
       const isFinancingNumeric =
         selectedFieldGroup === "Financing" && !categoricalFinFields.has(field);
 
@@ -1139,10 +1108,8 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
           });
           continue;
         }
-        // fall through to categorical if no numeric data
       }
 
-      // ---------- Categorical (% of total INCLUDING Unknown) ----------
       const counts = new Map();
       let validCount = 0;
       let missingCount = 0;
@@ -1214,17 +1181,28 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
 
   const activeSampleSize = plotFrame.length;
 
-  // Price scope (mirrors the demoModel + state-filter scope used in the right panel)
-  const priceScopeRows = useMemo(() => {
+  const priceBaseRows = useMemo(() => {
+    if (priceLocked) return rows;
     return demoModel
       ? scopeRows.filter((r) => r.model === demoModel)
       : scopeRows;
-  }, [demoModel, scopeRows]);
+  }, [priceLocked, rows, scopeRows, demoModel]);
 
-  // Sample size for the Transaction Price chart
-  const activePriceSampleSize = priceScopeRows.length;
+  const priceGroupKeys = useMemo(() => {
+    const set = new Set(
+      priceBaseRows.map((r) =>
+        colorMode === "cluster" ? r.cluster : String(r.model)
+      )
+    );
+    let arr = Array.from(set);
+    if (colorMode === "cluster")
+      arr = arr.filter(Number.isFinite).sort((a, b) => a - b);
+    else arr = arr.sort();
+    return arr;
+  }, [priceBaseRows, colorMode]);
 
-  /* ---------- UI ---------- */
+  const activePriceSampleSize = priceBaseRows.length;
+
   return (
     <div
       style={{
@@ -1235,7 +1213,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
         color: THEME.text,
       }}
     >
-      {/* ---- Page Header ---- */}
       <div style={{ marginBottom: 20 }}>
         <h1
           style={{
@@ -1264,7 +1241,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
         </p>
       </div>
 
-      {/* Controls */}
       <div
         style={{
           display: "grid",
@@ -1274,9 +1250,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
           marginBottom: 12,
         }}
       >
-        {/* Category chooser */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {/* Helper text */}
           <div
             style={{
               color: THEME.muted,
@@ -1288,11 +1262,8 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             Choose category
           </div>
 
-          {/* Mode selector above SUVs / Pickups — styled to match Market Simulation */}
           {(() => {
             const isDark = isDarkHex(THEME.panel);
-
-            // Match the neutral, readable toggle styling from Market Simulation
             const TOGGLE_ACTIVE_BORDER = isDark ? "#FFFFFF" : "#11232F";
             const TOGGLE_ACTIVE_BG = isDark
               ? "rgba(255,255,255,0.22)"
@@ -1343,10 +1314,8 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             );
           })()}
 
-          {/* SUV / Pickup buttons only for Core Set */}
           {datasetMode === "CORE" ? (
             <>
-              {/* SUVs / Pickups label */}
               <div style={{ marginTop: 6 }}>
                 <div
                   style={{ color: THEME.muted, marginTop: 8, marginBottom: 12 }}
@@ -1362,7 +1331,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                     justifyContent: "start",
                   }}
                 >
-                  {/* SUVs */}
                   <button
                     onClick={() => setGroup("SUV")}
                     style={chipFixedCG(
@@ -1376,7 +1344,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                     SUV
                   </button>
 
-                  {/* Pickups */}
                   <button
                     onClick={() => setGroup("Pickup")}
                     style={chipFixedCG(
@@ -1393,7 +1360,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
               </div>
             </>
           ) : (
-            // SEGMENTS placeholder
             <div
               style={{
                 marginTop: 4,
@@ -1410,7 +1376,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
           )}
         </div>
 
-        {/* Model buttons */}
         <div>
           <div style={{ color: THEME.muted, marginTop: 10, marginBottom: 12 }}>
             Choose models
@@ -1436,10 +1401,10 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                   onClick={() => toggleModel(m)}
                   style={chipFixedCG(
                     active,
-                    baseColor, // border + translucent fill color
-                    THEME.panel, // for contrast logic
-                    THEME.border, // idle border
-                    THEME.text // text color
+                    baseColor,
+                    THEME.panel,
+                    THEME.border,
+                    THEME.text
                   )}
                   title={m}
                 >
@@ -1481,7 +1446,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
           </div>
         </div>
 
-        {/* Color mode + Cluster zoom + Center focus (spaced row) */}
         <div
           style={{
             display: "flex",
@@ -1492,78 +1456,113 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             marginBottom: 0,
           }}
         >
-          {/* Color mode toggle */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div
-              style={{
-                display: "flex",
-                borderRadius: 999,
-                border: `1px solid ${THEME.border}`,
-                overflow: "hidden",
-              }}
-            >
-              {["cluster", "model"].map((mode) => {
-                const active = colorMode === mode;
-                return (
-                  <button
-                    key={mode}
-                    onClick={() => setColorMode(mode)}
-                    style={{
-                      background: active ? THEME.accent : "transparent",
-                      color: active ? THEME.onAccent : THEME.text,
-                      border: "none",
-                      padding: "6px 14px",
-                      fontSize: 13,
-                      cursor: "pointer",
-                      transition: "background-color 120ms ease",
-                    }}
-                  >
-                    {mode.charAt(0).toUpperCase() + mode.slice(1)}
-                  </button>
-                );
-              })}
-            </div>
+          <div
+            style={{
+              display: "flex",
+              borderRadius: 999,
+              border: `1px solid ${THEME.border}`,
+              overflow: "hidden",
+              boxShadow:
+                THEME.name === "midnight"
+                  ? "0 1px 2px rgba(0,0,0,0.3)"
+                  : "0 1px 3px rgba(0,0,0,0.15)",
+              background:
+                THEME.name === "midnight" ? THEME.panel : "rgba(0,0,0,0.04)",
+            }}
+          >
+            {["cluster", "model"].map((mode) => {
+              const active = colorMode === mode;
+              const activeBg =
+                THEME.name === "midnight" ? "#ffffff" : "#f9f9f9";
+              const inactiveBg =
+                THEME.name === "midnight" ? THEME.panel : "rgba(0,0,0,0.04)";
+              const activeText = "#111827";
+              const inactiveText =
+                THEME.name === "midnight" ? THEME.text : "#444";
+
+              return (
+                <button
+                  key={mode}
+                  onClick={() => setColorMode(mode)}
+                  style={{
+                    background: active ? activeBg : inactiveBg,
+                    color: active ? activeText : inactiveText,
+                    border: "none",
+                    padding: "6px 16px",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    transition: "all 0.2s ease",
+                    opacity: active ? 1 : 0.75,
+                    boxShadow: active
+                      ? THEME.name === "midnight"
+                        ? "inset 0 0 0 1px rgba(255,255,255,0.6)"
+                        : "inset 0 0 0 1px rgba(0,0,0,0.05)"
+                      : "none",
+                  }}
+                >
+                  {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                </button>
+              );
+            })}
           </div>
 
-          {/* Cluster zoom buttons */}
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {/* All button — same neutral theme as Core Set / Segments */}
             <button
               onClick={() => setZoomCluster(null)}
               style={{
-                background: zoomCluster == null ? THEME.accent : THEME.panel,
-                color: zoomCluster == null ? THEME.onAccent : THEME.muted,
-                border: `1px solid ${
-                  zoomCluster == null ? THEME.accent : THEME.border
-                }`,
+                background: zoomCluster == null ? "#ffffff" : THEME.panel,
+                color: zoomCluster == null ? "#111827" : THEME.text,
+                border: `1px solid ${THEME.border}`,
                 borderRadius: 8,
-                padding: "6px 10px",
+                padding: "6px 12px",
                 cursor: "pointer",
                 fontSize: 13,
+                fontWeight: 600,
+                opacity: zoomCluster == null ? 1 : 0.7,
+                transition: "all 0.2s ease",
+                boxShadow:
+                  zoomCluster == null
+                    ? "0 1px 2px rgba(0,0,0,0.08)"
+                    : "inset 0 0 0 1px rgba(255,255,255,0.05)",
               }}
             >
               All
             </button>
-            {availableClusters.map((k) => {
+
+            {[
+              { k: 1, color: "#1F77B4" },
+              { k: 2, color: "#FF7F0E" },
+              { k: 3, color: "#2CA02C" },
+              { k: 4, color: "#D62728" },
+            ].map(({ k, color }) => {
               const active = zoomCluster === k;
               return (
                 <button
                   key={k}
                   onClick={() => setZoomCluster(k)}
+                  title={`Zoom to C${k}`}
                   style={{
-                    background: active ? THEME.accent : THEME.panel,
-                    color: active ? THEME.onAccent : THEME.muted,
-                    border: `1px solid ${active ? THEME.accent : THEME.border}`,
+                    background: color,
+                    color: "#ffffff",
+                    border: `1px solid ${color}`,
                     borderRadius: 8,
-                    padding: "6px 10px",
+                    padding: "6px 12px",
                     cursor: "pointer",
                     fontSize: 13,
+                    fontWeight: 600,
+                    opacity: active ? 1 : 0.45,
+                    filter: active ? "none" : "grayscale(0.2)",
+                    transition: "opacity 0.2s ease, filter 0.2s ease",
                   }}
-                >{`C${k}`}</button>
+                >
+                  {`C${k}`}
+                </button>
               );
             })}
           </div>
 
-          {/* Center focus slider + % */}
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
             <div style={{ color: THEME.muted }}>Collapse points:</div>
             <input
@@ -1588,7 +1587,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
         </div>
       </div>
 
-      {/* Chart + Right Panel */}
       <div
         style={{
           display: "flex",
@@ -1598,7 +1596,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
           height: LAYOUT.topRowHeight,
         }}
       >
-        {/* Chart (NOT filtered by state) */}
         <div
           style={{
             flex: 1,
@@ -1610,7 +1607,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             position: "relative",
           }}
         >
-          {/* --- Chart Title: Customer Clusters --- */}
           <div
             style={{
               position: "absolute",
@@ -1627,7 +1623,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             {group === "Pickup" ? "Core Pickup Clusters" : "Core SUV Clusters"}
           </div>
 
-          {/* --- Sample size label --- */}
           <div
             style={{
               position: "absolute",
@@ -1668,7 +1663,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             </button>
           )}
 
-          {/* Full-bleed plot area under the title */}
           <div
             style={{
               position: "absolute",
@@ -1706,7 +1700,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                   const fillColor =
                     colorMode === "model"
                       ? modelColors[String(k)] || THEME.accent
-                      : colorForKey(k, groupKeys);
+                      : clusterColor(k, groupKeys);
 
                   return (
                     <Scatter
@@ -1727,7 +1721,25 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
 
                 {zoomCluster == null && (
                   <Scatter
-                    data={clusterCentroidsForHotspots}
+                    data={(() => {
+                      const byCluster = new Map();
+                      for (const r of baseByModel) {
+                        const k = r.cluster;
+                        if (!byCluster.has(k))
+                          byCluster.set(k, { sumX: 0, sumY: 0, n: 0 });
+                        const s = byCluster.get(k);
+                        s.sumX += r.emb_x;
+                        s.sumY += r.emb_y;
+                        s.n += 1;
+                      }
+                      return Array.from(byCluster.entries()).map(
+                        ([cluster, s]) => ({
+                          cluster,
+                          emb_x: s.sumX / s.n,
+                          emb_y: s.sumY / s.n,
+                        })
+                      );
+                    })()}
                     name=""
                     legendType="none"
                     isAnimationActive={false}
@@ -1748,7 +1760,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
           </div>
         </div>
 
-        {/* Right Panel */}
         <div
           style={{
             width: 360,
@@ -1763,7 +1774,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             boxSizing: "border-box",
           }}
         >
-          {/* Header row with category dropdown */}
           <div
             style={{
               display: "flex",
@@ -1794,7 +1804,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             </select>
           </div>
 
-          {/* Model focus (single-select) */}
           <div
             style={{
               display: "flex",
@@ -1843,7 +1852,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             })}
           </div>
 
-          {/* Sections list */}
           <div
             style={{
               overflowY: "auto",
@@ -1896,38 +1904,32 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                     {varLabel(section.field)}
                   </div>
 
-                  {/* Numeric KPI (Financing averages) */}
                   {section.mode === "numeric" ? (
                     <div
                       style={{
                         display: "flex",
-                        alignItems: "center",
+                        alignItems: "baseline",
                         justifyContent: "space-between",
-                        background: THEME.panel,
-                        border: `1px solid ${THEME.border}`,
-                        borderRadius: 8,
-                        padding: "10px 12px",
+                        padding: "2px 0",
                       }}
                     >
-                      <div style={{ fontSize: 12, opacity: 0.8 }}>Average</div>
                       <div
                         style={{
-                          fontSize: 18,
+                          fontSize: 24,
                           fontWeight: 800,
                           color: THEME.accent,
                         }}
                       >
                         {section.kpi.display}
                       </div>
-                      <div style={{ fontSize: 11, opacity: 0.7 }}>
-                        n={section.kpi.nValid.toLocaleString()}
-                        {section.kpi.nMissing
-                          ? ` • missing=${section.kpi.nMissing.toLocaleString()}`
-                          : ""}
+                      <div style={{ fontSize: 13 }}>
+                        <span style={{ opacity: 0.7 }}>Sample size:</span>{" "}
+                        <span style={{ fontWeight: 700, color: THEME.text }}>
+                          {section.kpi.nValid.toLocaleString()}
+                        </span>
                       </div>
                     </div>
                   ) : (
-                    // Categorical (% of total incl Unknown)
                     section.items.map((it) => (
                       <div
                         key={`${section.field}::${it.label}`}
@@ -1996,7 +1998,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
           gridAutoRows: "minmax(0, auto)",
         }}
       >
-        {/* LEFT: Attitudes (only) */}
+        {/* LEFT: Attitudes (lock) */}
         <div
           style={{
             display: "flex",
@@ -2005,7 +2007,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             minHeight: 0,
           }}
         >
-          {/* Attitudes Scatterplot */}
           <div
             style={{
               position: "relative",
@@ -2021,44 +2022,55 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
               gap: 8,
             }}
           >
-            <div
+            {/* Lock button (Attitudes) */}
+            <button
+              onClick={() => setAttLocked((v) => !v)}
+              title={
+                attLocked
+                  ? "Unlock — follow filters"
+                  : "Lock — show full population"
+              }
               style={{
+                position: "absolute",
+                top: 10,
+                right: 12,
+                zIndex: 2,
+                background: THEME.panel,
+                color: THEME.text,
+                border: "none",
+                borderRadius: 8,
+                padding: 6,
+                cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
-                gap: 12,
-                flexWrap: "wrap",
+                justifyContent: "center",
+                transition: "all 0.25s ease",
               }}
             >
-              <div
-                style={{
-                  width: "100%",
-                  display: "flex",
-                  justifyContent: "center",
-                  alignItems: "center",
-                  fontWeight: 700,
-                  fontSize: 22,
-                  marginTop: 8,
-                  marginBottom: -15,
-                  color: THEME.text,
-                }}
-              >
-                Customer Loyalty & Willingness to Pay
-              </div>
+              {attLocked ? (
+                <Lock size={16} strokeWidth={2} />
+              ) : (
+                <Unlock size={16} strokeWidth={2} />
+              )}
+            </button>
 
-              <div
-                style={{
-                  width: "100%",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "flex-start",
-                  gap: 6,
-                }}
-              ></div>
+            <div
+              style={{
+                width: "100%",
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
+                fontWeight: 700,
+                fontSize: 22,
+                marginTop: 8,
+                marginBottom: 0,
+                color: THEME.text,
+              }}
+            >
+              Customer Loyalty & Willingness to Pay
             </div>
 
-            {/* --- Attitudes chart area --- */}
             <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
-              {/* Dynamic axis combination label */}
               <div
                 style={{
                   position: "absolute",
@@ -2086,7 +2098,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                 {varLabel(attYVar)}
               </div>
 
-              {/* Sample size indicator (top right) */}
               <div
                 style={{
                   position: "absolute",
@@ -2099,7 +2110,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
               >
                 Sample size:{" "}
                 <span style={{ fontWeight: 700, color: THEME.text }}>
-                  {scopeRows.length.toLocaleString()}
+                  {attBaseRows.length.toLocaleString()}
                 </span>
               </div>
 
@@ -2127,50 +2138,98 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                     domain={[0, 100]}
                   />
                   <Tooltip
+                    isAnimationActive={false}
                     cursor={{ stroke: THEME.border }}
-                    contentStyle={{
+                    wrapperStyle={{
                       background: THEME.bg,
                       border: `1px solid ${THEME.border}`,
-                      color: THEME.text,
                       borderRadius: 8,
+                      color: THEME.text,
+                      boxShadow: "0 4px 12px rgba(0,0,0,0.20)",
+                      padding: 0,
                     }}
-                    formatter={(value, name) => {
-                      if (name === "x")
-                        return [
-                          `${Number(value).toFixed(1)}%`,
-                          varLabel(attXVar),
-                        ];
-                      if (name === "y")
-                        return [
-                          `${Number(value).toFixed(1)}%`,
-                          varLabel(attYVar),
-                        ];
-                      return [value, name];
-                    }}
-                    labelFormatter={() => ""}
-                  />
+                    content={({ active, payload }) => {
+                      if (!active || !payload || !payload.length) return null;
+                      const p = payload[0]?.payload;
+                      if (!p) return null;
 
-                  {attitudesPoints.map((pt) => (
-                    <Scatter
-                      key={`att-${pt.key}`}
-                      name={pt.name}
-                      data={[pt]}
-                      fill={
+                      const isNumericKey = Number.isFinite(Number(p.key));
+                      const title = isNumericKey
+                        ? `C${p.key}`
+                        : p.name || String(p.key);
+
+                      const fillColor =
                         colorMode === "model"
-                          ? modelColors[String(pt.key)] || THEME.accent
-                          : colorForKey(pt.key, groupKeys)
-                      }
-                      shape={<BigDot />}
-                      isAnimationActive={true}
-                      animationId={animToken}
-                      animationDuration={600}
-                      animationEasing="ease-in-out"
-                    />
-                  ))}
+                          ? modelColors[String(p.key)] || THEME.accent
+                          : clusterColor(Number(p.key));
+
+                      return (
+                        <div
+                          style={{
+                            background: THEME.bg,
+                            borderRadius: 8,
+                            color: THEME.text,
+                            padding: "10px 12px",
+                            border: `1px solid ${THEME.border}`,
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontWeight: 800,
+                              marginBottom: 6,
+                              color: fillColor,
+                            }}
+                          >
+                            {title}
+                          </div>
+                          <div style={{ display: "grid", rowGap: 2 }}>
+                            <div>
+                              <span style={{ opacity: 0.75 }}>Loyalty:</span>{" "}
+                              <span style={{ fontWeight: 600 }}>
+                                {Number.isFinite(p.x)
+                                  ? `${p.x.toFixed(1)}%`
+                                  : "—"}
+                              </span>
+                            </div>
+                            <div>
+                              <span style={{ opacity: 0.75 }}>WTP:</span>{" "}
+                              <span style={{ fontWeight: 600 }}>
+                                {Number.isFinite(p.y)
+                                  ? `${p.y.toFixed(1)}%`
+                                  : "—"}
+                              </span>
+                            </div>
+                            <div>
+                              <span style={{ opacity: 0.75 }}>Sample:</span>{" "}
+                              <span
+                                style={{ fontWeight: 600, color: THEME.text }}
+                              >
+                                {Number.isFinite(p.n)
+                                  ? p.n.toLocaleString()
+                                  : "—"}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Scatter data={attitudesPoints} name="" shape={<BigDot />}>
+                    {attitudesPoints.map((pt, i) => (
+                      <Cell
+                        key={`att-cell-${pt.key}-${i}`}
+                        fill={
+                          colorMode === "model"
+                            ? modelColors[String(pt.key)] || THEME.accent
+                            : clusterColor(Number(pt.key))
+                        }
+                      />
+                    ))}
+                  </Scatter>
                 </ScatterChart>
               </ResponsiveContainer>
 
-              {/* Y-axis: compact dropdown (left) */}
+              {/* WTP compact dropdown (left) */}
               <div
                 style={{
                   position: "absolute",
@@ -2205,7 +2264,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                 </select>
               </div>
 
-              {/* Y-axis: rotated label */}
               <div
                 style={{
                   position: "absolute",
@@ -2224,7 +2282,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                 </span>
               </div>
 
-              {/* X-axis label + dropdown below chart */}
               <div
                 style={{
                   position: "absolute",
@@ -2269,7 +2326,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
           </div>
         </div>
 
-        {/* RIGHT: Geographic map */}
+        {/* RIGHT: Geographic map (LOCK ADDED) */}
         <div
           style={{
             background: THEME.panel,
@@ -2284,13 +2341,45 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             flexDirection: "column",
           }}
         >
+          {/* Lock button (Map) */}
+          <button
+            onClick={() => setMapLocked((v) => !v)}
+            title={
+              mapLocked
+                ? "Unlock — map follows filters"
+                : "Lock — map shows full population"
+            }
+            style={{
+              position: "absolute",
+              top: 10,
+              right: 12,
+              zIndex: 2,
+              background: THEME.panel,
+              color: THEME.text,
+              border: "none",
+              borderRadius: 8,
+              padding: 6,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              transition: "all 0.25s ease",
+            }}
+          >
+            {mapLocked ? (
+              <Lock size={16} strokeWidth={2} />
+            ) : (
+              <Unlock size={16} strokeWidth={2} />
+            )}
+          </button>
+
           {selectedStateName && (
             <button
               onClick={() => setSelectedStateName(null)}
               style={{
                 position: "absolute",
                 top: 10,
-                right: 12,
+                right: 46,
                 background: THEME.panel,
                 color: THEME.text,
                 border: `1px solid ${THEME.border}`,
@@ -2398,15 +2487,14 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
           <div
             style={{
               marginTop: 10,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
+              position: "relative",
+              minHeight: 22,
             }}
           >
             <div
               style={{
                 position: "absolute",
-                bottom: 10,
+                bottom: 0,
                 right: 14,
                 fontSize: 13,
                 opacity: 0.85,
@@ -2438,11 +2526,10 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                 "No state data in current scope"
               )}
             </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }} />
           </div>
         </div>
 
+        {/* Transaction Price (lock already present earlier) */}
         <div
           style={{
             gridColumn: "1 / -1",
@@ -2458,6 +2545,37 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             position: "relative",
           }}
         >
+          <button
+            onClick={() => setPriceLocked((v) => !v)}
+            title={
+              priceLocked
+                ? "Unlock — follow filters"
+                : "Lock — show full population"
+            }
+            style={{
+              position: "absolute",
+              top: 10,
+              right: 12,
+              zIndex: 2,
+              background: THEME.panel,
+              color: THEME.text,
+              border: "none",
+              borderRadius: 8,
+              padding: 6,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              transition: "all 0.25s ease",
+            }}
+          >
+            {priceLocked ? (
+              <Lock size={16} strokeWidth={2} />
+            ) : (
+              <Unlock size={16} strokeWidth={2} />
+            )}
+          </button>
+
           <div
             style={{
               width: "100%",
@@ -2474,7 +2592,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             Transaction Price
           </div>
 
-          {/* --- Sample size label (Transaction Price) --- */}
           <div
             style={{
               position: "absolute",
@@ -2497,9 +2614,9 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
               {(() => {
                 const groupingKey =
                   colorMode === "cluster" ? "cluster" : "model";
-                const orderKeys = groupKeys;
+                const orderKeys = priceGroupKeys;
                 const series = buildPriceSeriesByGroup(
-                  priceScopeRows,
+                  priceBaseRows,
                   groupingKey,
                   orderKeys
                 );
@@ -2553,23 +2670,88 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                       allowDecimals={false}
                     />
                     <Tooltip
-                      contentStyle={{
-                        background: THEME.bg,
-                        border: `1px solid ${THEME.border}`,
-                        color: THEME.text,
-                        borderRadius: 8,
+                      isAnimationActive={false}
+                      content={({ active, payload = [], label }) => {
+                        if (!active || !payload.length) return null;
+
+                        const byName = new Map();
+                        for (const entry of payload) {
+                          if (entry?.dataKey !== "pct") continue;
+                          const prev = byName.get(entry.name);
+                          const score = entry?.stroke ? 2 : 1;
+                          const prevScore = prev?.stroke ? 2 : prev ? 1 : 0;
+                          if (score >= prevScore) byName.set(entry.name, entry);
+                        }
+                        const unique = Array.from(byName.values());
+
+                        return (
+                          <div
+                            style={{
+                              background: THEME.bg,
+                              border: `1px solid ${THEME.border}`,
+                              borderRadius: 8,
+                              padding: "10px 12px",
+                              color: THEME.text,
+                              boxShadow: "0 4px 12px rgba(0,0,0,0.20)",
+                            }}
+                          >
+                            <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                              {label}
+                            </div>
+
+                            {unique.map((entry, i) => {
+                              let seriesColor = entry?.stroke || entry?.color;
+                              if (!seriesColor) {
+                                const rawKey = entry?.name ?? "";
+                                const isCluster =
+                                  /^C\d+$/i.test(rawKey) &&
+                                  colorMode === "cluster";
+                                const key = isCluster
+                                  ? Number(rawKey.slice(1))
+                                  : String(rawKey);
+                                seriesColor =
+                                  colorMode === "cluster"
+                                    ? clusterColor(Number(key))
+                                    : modelColors[String(key)] || THEME.accent;
+                              }
+
+                              const pct = Number(entry?.value);
+                              const count = entry?.payload?.count ?? 0;
+
+                              return (
+                                <div
+                                  key={i}
+                                  style={{
+                                    display: "flex",
+                                    gap: 6,
+                                    alignItems: "baseline",
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      color: seriesColor,
+                                      fontWeight: 700,
+                                    }}
+                                  >
+                                    {entry.name}:
+                                  </span>
+                                  <span style={{ fontWeight: 500 }}>
+                                    {Number.isFinite(pct)
+                                      ? pct.toFixed(1)
+                                      : "—"}
+                                    %
+                                  </span>
+                                  <span style={{ color: THEME.muted }}>
+                                    {" "}
+                                    ({count.toLocaleString?.() ?? "—"})
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
                       }}
-                      formatter={(value, name, payload) => {
-                        const pct = Number(value);
-                        const count = payload?.payload?.count ?? 0;
-                        return [
-                          `${pct.toFixed(1)}% (${count.toLocaleString()})`,
-                          name,
-                        ];
-                      }}
-                      labelFormatter={(label) => label}
                     />
-                    {/* Legend intentionally omitted */}
 
                     <defs>
                       {orderKeys.map((k) => {
@@ -2580,7 +2762,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                         const col =
                           colorMode === "model"
                             ? modelColors[String(k)] || THEME.accent
-                            : colorForKey(k, orderKeys);
+                            : clusterColor(Number(k));
                         return (
                           <linearGradient
                             key={id}
@@ -2609,7 +2791,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                       const col =
                         colorMode === "model"
                           ? modelColors[String(s.key)] || THEME.accent
-                          : colorForKey(s.key, orderKeys);
+                          : clusterColor(Number(s.key));
                       const fillId = `url(#priceFill_${String(s.key).replace(
                         /\s+/g,
                         "_"
@@ -2653,10 +2835,8 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             </ResponsiveContainer>
           </div>
         </div>
-        {/* ⬆⬆⬆ END full-width Transaction Price row */}
       </div>
 
-      {/* Persona Modal */}
       {showPersona && (
         <div
           role="dialog"
@@ -2686,7 +2866,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
               color: THEME.text,
             }}
           >
-            {/* Header */}
             <div
               style={{
                 display: "flex",
@@ -2731,7 +2910,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
               </button>
             </div>
 
-            {/* Body */}
             <div style={{ padding: 16, display: "grid", gap: 12 }}>
               {(() => {
                 const persona = getPersonaForCluster(zoomCluster);
@@ -2750,7 +2928,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                       </div>
                     </div>
 
-                    {/* Snapshot chips */}
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       <span
                         style={{
@@ -2788,39 +2965,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                       </span>
                     </div>
 
-                    {/* Key Takeaways */}
-                    <div
-                      style={{
-                        background: THEME.panel,
-                        border: `1px solid ${THEME.border}`,
-                        borderRadius: 8,
-                      }}
-                    >
-                      <div
-                        style={{
-                          padding: "10px 12px",
-                          borderBottom: `1px solid ${THEME.border}`,
-                          fontWeight: 700,
-                        }}
-                      >
-                        Key Takeaways
-                      </div>
-                      <ul
-                        style={{
-                          margin: 0,
-                          padding: "10px 26px",
-                          lineHeight: 1.5,
-                        }}
-                      >
-                        {persona.bullets.map((b, i) => (
-                          <li key={i} style={{ marginBottom: 6 }}>
-                            {b}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-
-                    {/* Placeholders for future content */}
                     <div
                       style={{
                         display: "grid",
