@@ -98,6 +98,12 @@ const US_STATE_ABBR_TO_NAME = {
 };
 const US_STATE_NAME_SET = new Set(Object.values(US_STATE_ABBR_TO_NAME));
 
+const LAYOUT = {
+  topRowHeight: 620,
+  bottomMinHeight: 760,
+  subPanelMinHeight: 360,
+};
+
 function toStateName(labelRaw) {
   if (!labelRaw) return null;
   const s = String(labelRaw).trim();
@@ -119,6 +125,39 @@ function toStateName(labelRaw) {
 }
 
 /* ---------- color helpers ---------- */
+// --- helpers (use your existing ones if present) ---
+const hexToRgbStr = (hex) => {
+  const h = hex.replace("#", "");
+  const full =
+    h.length === 3
+      ? h
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : h;
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  return `${r}, ${g}, ${b}`;
+};
+
+const isDarkHex = (hex) => {
+  const h = hex?.replace("#", "");
+  if (!h || (h.length !== 6 && h.length !== 3)) return false;
+  const full =
+    h.length === 3
+      ? h
+          .split("")
+          .map((ch) => ch + ch)
+          .join("")
+      : h;
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  const brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return brightness < 0.5;
+};
+
 function lerp(a, b, t) {
   return a + (b - a) * t;
 }
@@ -142,14 +181,15 @@ function rgbToHex({ r, g, b }) {
   return `#${to(Math.round(r))}${to(Math.round(g))}${to(Math.round(b))}`;
 }
 function blendHex(aHex, bHex, t) {
-  const a = hexToRgb(aHex),
-    b = hexToRgb(bHex);
+  const a = hexToRgb(aHex);
+  const b = hexToRgb(bHex);
   return rgbToHex({
     r: lerp(a.r, b.r, t),
     g: lerp(a.g, b.g, t),
     b: lerp(a.b, b.b, t),
   });
 }
+
 function colorForKey(key, allKeys) {
   const keyStr = String(key);
   const idx = allKeys.findIndex((k) => String(k) === keyStr);
@@ -188,7 +228,7 @@ function BigDot(props) {
 }
 
 function TinyDot({ cx, cy, fill }) {
-  return <circle cx={cx} cy={cy} r={5} fill={fill} />; // tweak r
+  return <circle cx={cx} cy={cy} r={5} fill={fill} />;
 }
 
 function paddedDomain(vals) {
@@ -240,7 +280,7 @@ const FIELD_GROUPS = {
     "DEMO_LOCATION",
     "DEMO_MARITAL",
     "DEMO_EMPLOY",
-    // "ADMARK_STATE", // ← removed per your earlier request
+    // "ADMARK_STATE", // ← removed per request
     "BLD_CHILDREN",
     "DEMO_EMPTY_NESTER",
   ],
@@ -511,9 +551,46 @@ function percentAgreeMappedPolicy(
   return denom > 0 ? (agree / denom) * 100 : NaN;
 }
 
+function useAnimationToken(deps) {
+  return React.useMemo(() => deps.join("::"), deps);
+}
+
+const CG_SUV_COLOR = "#FF5432";
+const CG_PU_COLOR = "#1F6FFF";
+
+const chipFixedCG = (active, baseColor, panelColor, borderColor, textColor) => {
+  const alpha = isDarkHex(panelColor) ? 0.22 : 0.14;
+  return {
+    padding: "6px 10px",
+    borderRadius: 10,
+    border: `1px solid ${active ? baseColor : borderColor}`,
+    background: active
+      ? `rgba(${hexToRgbStr(baseColor)}, ${alpha})`
+      : "transparent",
+    color: textColor,
+    cursor: "pointer",
+    fontSize: 13,
+    transition: "border-color 120ms ease, background-color 120ms ease",
+    minWidth: 90,
+    textAlign: "center",
+  };
+};
+
 export default function CustomerGroups({ COLORS: THEME, useStyles }) {
+  // NEW: dataset mode — "CORE" (current SUV/Pickup) or "SEGMENTS" (placeholder)
+  const [datasetMode, setDatasetMode] = useState("CORE");
+
   const [group, setGroup] = useState("SUV");
-  const dataPoints = group === "SUV" ? suvPoints : puPoints;
+  const dataPoints =
+    datasetMode === "CORE" ? (group === "SUV" ? suvPoints : puPoints) : []; // SEGMENTS: no data yet
+
+  // Reset key view states when switching modes
+  useEffect(() => {
+    setZoomCluster(null);
+    setCenterT(0);
+    setSelectedStateName(null);
+    setDemoModel(null);
+  }, [datasetMode]);
 
   // Normalize rows
   const rows = useMemo(() => {
@@ -556,7 +633,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
   );
 
   const [selectedModels, setSelectedModels] = useState(allModels);
-  const [colorMode, setColorMode] = useState("model"); // default to Model per your earlier request
+  const [colorMode, setColorMode] = useState("model"); // default to Model
   const [zoomCluster, setZoomCluster] = useState(null);
   const [centerT, setCenterT] = useState(0);
   const [selectedStateName, setSelectedStateName] = useState(null);
@@ -769,6 +846,18 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
   const WTP_VARS = FIELD_GROUPS["Willingness to Pay"];
   const [attXVar, setAttXVar] = useState(LOYALTY_VARS[0]);
   const [attYVar, setAttYVar] = useState(WTP_VARS[0]);
+
+  const animToken = useAnimationToken([
+    datasetMode,
+    group,
+    colorMode,
+    zoomCluster ?? "all",
+    selectedModels.join("|"),
+    selectedStateName ?? "no-state",
+    demoModel ?? "all-models",
+    attXVar,
+    attYVar,
+  ]);
 
   // Attitudes points computed from current scopeRows (includes state filter)
   const attitudesPoints = useMemo(() => {
@@ -1036,22 +1125,38 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
       style={{
         minHeight: "100vh",
         padding: 16,
-        fontFamily: "system-ui, sans-serif",
+        fontFamily: "var(--app-font)",
         background: THEME.bg,
         color: THEME.text,
       }}
     >
-      <h1 style={{ margin: 0, marginBottom: 8, color: THEME.accent }}>
-        Customer Groups
-      </h1>
+      {/* ---- Page Header ---- */}
+      <div style={{ marginBottom: 20 }}>
+        <h1
+          style={{
+            margin: 0,
+            color: THEME.accent,
+            fontSize: 38,
+            fontWeight: 700,
+            marginBottom: 10,
+          }}
+        >
+          Customer Groups
+        </h1>
 
-      {/* tiny status line */}
-      <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 12 }}>
-        Records (models filter): {baseByModel.length.toLocaleString()}
-        {zoomCluster != null ? ` • Zoom C${zoomCluster}` : ""}
-        {selectedStateName
-          ? ` • Demographics filtered to ${selectedStateName}`
-          : ""}
+        <p
+          style={{
+            color: THEME.muted,
+            margin: 0,
+            fontSize: 20,
+            lineHeight: 1.4,
+          }}
+        >
+          Explore how customer segments differ across models and clusters.
+          Toggle datasets, select models, or filter by state to see how
+          attitudes, transaction prices, and demographics vary within your
+          audience.
+        </p>
       </div>
 
       {/* Controls */}
@@ -1064,41 +1169,139 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
           marginBottom: 12,
         }}
       >
-        {/* Dataset toggle */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <div style={{ fontWeight: 600 }}>Dataset:</div>
-          <button
-            onClick={() => setGroup("SUV")}
+        {/* Category chooser */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {/* Helper text */}
+          <div
             style={{
-              background: group === "SUV" ? THEME.accent : THEME.panel,
-              color: group === "SUV" ? THEME.onAccent : THEME.muted,
-              border: `1px solid ${
-                group === "SUV" ? THEME.accent : THEME.border
-              }`,
-              borderRadius: 8,
-              padding: "6px 10px",
-              cursor: "pointer",
-              fontSize: 13,
+              color: THEME.muted,
+              marginTop: 20,
+              marginBottom: 2,
+              fontSize: 16,
             }}
           >
-            SUVs
-          </button>
-          <button
-            onClick={() => setGroup("Pickup")}
-            style={{
-              background: group === "Pickup" ? THEME.accent : THEME.panel,
-              color: group === "Pickup" ? THEME.onAccent : THEME.muted,
-              border: `1px solid ${
-                group === "Pickup" ? THEME.accent : THEME.border
-              }`,
-              borderRadius: 8,
-              padding: "6px 10px",
-              cursor: "pointer",
-              fontSize: 13,
-            }}
-          >
-            Pickups
-          </button>
+            Choose category
+          </div>
+
+          {/* Mode selector above SUVs / Pickups — styled to match Market Simulation */}
+          {(() => {
+            const isDark = isDarkHex(THEME.panel);
+
+            // Match the neutral, readable toggle styling from Market Simulation
+            const TOGGLE_ACTIVE_BORDER = isDark ? "#FFFFFF" : "#11232F";
+            const TOGGLE_ACTIVE_BG = isDark
+              ? "rgba(255,255,255,0.22)"
+              : "rgba(17,35,47,0.10)";
+            const TOGGLE_IDLE_BORDER = THEME.border;
+            const TOGGLE_TEXT = THEME.text;
+
+            const options = [
+              { id: "CORE", label: "Core Set" },
+              { id: "SEGMENTS", label: "Segments" },
+            ];
+
+            return (
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  marginTop: 4,
+                  marginBottom: 12,
+                }}
+              >
+                {options.map((opt) => {
+                  const active = datasetMode === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      onClick={() => setDatasetMode(opt.id)}
+                      style={{
+                        padding: "8px 12px",
+                        borderRadius: 10,
+                        border: active
+                          ? `1px solid ${TOGGLE_ACTIVE_BORDER}`
+                          : `1px solid ${TOGGLE_IDLE_BORDER}`,
+                        background: active ? TOGGLE_ACTIVE_BG : "transparent",
+                        fontSize: 16,
+                        color: TOGGLE_TEXT,
+                        cursor: "pointer",
+                        transition:
+                          "background-color 120ms ease, border-color 120ms ease",
+                      }}
+                      title={opt.label}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
+
+          {/* SUV / Pickup buttons only for Core Set */}
+          {datasetMode === "CORE" ? (
+            <>
+              {/* SUVs / Pickups label */}
+              <div style={{ marginTop: 6 }}>
+                <div style={{ color: THEME.muted, marginBottom: 12 }}>
+                  Segments: choose one or more
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(2, max-content)",
+                    gap: 8,
+                    justifyContent: "start",
+                  }}
+                >
+                  {/* SUVs */}
+                  <button
+                    onClick={() => setGroup("SUV")}
+                    style={chipFixedCG(
+                      group === "SUV",
+                      CG_SUV_COLOR,
+                      THEME.panel,
+                      THEME.border,
+                      THEME.text
+                    )}
+                  >
+                    SUVs
+                  </button>
+
+                  {/* Pickups */}
+                  <button
+                    onClick={() => setGroup("Pickup")}
+                    style={chipFixedCG(
+                      group === "Pickup",
+                      CG_PU_COLOR,
+                      THEME.panel,
+                      THEME.border,
+                      THEME.text
+                    )}
+                  >
+                    Pickups
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            // SEGMENTS placeholder
+            <div
+              style={{
+                marginTop: 4,
+                fontSize: 13,
+                color: THEME.muted,
+                border: `1px dashed ${THEME.border}`,
+                background: THEME.panel,
+                padding: "8px 10px",
+                borderRadius: 8,
+              }}
+            >
+              Segments dataset coming soon — controls and charts below will
+              populate when data is available.
+            </div>
+          )}
         </div>
 
         {/* Model buttons */}
@@ -1229,7 +1432,8 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
           </div>
 
           <div style={{ fontSize: 12, opacity: 0.8 }}>
-            Showing {plotDataCentered.length.toLocaleString()} points
+            Mode: {datasetMode === "CORE" ? "Core Set" : "Segments"} • Showing{" "}
+            {plotDataCentered.length.toLocaleString()} points
             {zoomCluster != null ? ` • Zoom: C${zoomCluster}` : ""} • Dataset:{" "}
             {group}
           </div>
@@ -1266,7 +1470,12 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
 
       {/* Chart + Right Panel */}
       <div
-        style={{ display: "flex", gap: 16, alignItems: "stretch", height: 500 }}
+        style={{
+          display: "flex",
+          gap: 16,
+          alignItems: "stretch",
+          height: LAYOUT.topRowHeight,
+        }}
       >
         {/* Chart (NOT filtered by state) */}
         <div
@@ -1392,7 +1601,6 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             </ScatterChart>
           </ResponsiveContainer>
         </div>
-
         {/* Right Panel */}
         <div
           style={{
@@ -1646,7 +1854,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             display: "flex",
             flexDirection: "column",
             gap: 16,
-            minHeight: 640,
+            minHeight: LAYOUT.bottomMinHeight,
           }}
         >
           {/* Attitudes Scatterplot (TOP) */}
@@ -1657,7 +1865,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
               borderRadius: 12,
               padding: 12,
               flex: 1,
-              minHeight: 300,
+              minHeight: LAYOUT.subPanelMinHeight,
               boxSizing: "border-box",
               display: "flex",
               flexDirection: "column",
@@ -1787,8 +1995,11 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                       name={pt.name}
                       data={[pt]}
                       fill={pt.color}
-                      isAnimationActive={false}
                       shape={<BigDot />}
+                      isAnimationActive={true}
+                      animationId={animToken}
+                      animationDuration={600}
+                      animationEasing="ease-in-out"
                     />
                   ))}
                 </ScatterChart>
@@ -1804,7 +2015,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
               borderRadius: 12,
               padding: 12,
               flex: 1,
-              minHeight: 300,
+              minHeight: LAYOUT.subPanelMinHeight,
               boxSizing: "border-box",
               display: "flex",
               flexDirection: "column",
@@ -1892,7 +2103,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                         }}
                         labelFormatter={(label) => label}
                       />
-                      {/* No Legend */}
+                      {/* Legend intentionally omitted */}
 
                       <defs>
                         {orderKeys.map((k) => {
@@ -1942,7 +2153,10 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                               dataKey="pct"
                               fill={fillId}
                               stroke="none"
-                              isAnimationActive={false}
+                              isAnimationActive={true}
+                              animationId={animToken}
+                              animationDuration={650}
+                              animationEasing="ease-in-out"
                             />
                             <Line
                               type="monotone"
@@ -1953,7 +2167,10 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                               strokeWidth={2}
                               dot={false}
                               activeDot={false}
-                              isAnimationActive={false}
+                              isAnimationActive={true}
+                              animationId={animToken}
+                              animationDuration={650}
+                              animationEasing="ease-in-out"
                             />
                           </React.Fragment>
                         );
@@ -1973,7 +2190,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             border: `1px solid ${THEME.border}`,
             borderRadius: 12,
             padding: 12,
-            minHeight: 640,
+            minHeight: LAYOUT.bottomMinHeight,
             boxSizing: "border-box",
             position: "relative",
             display: "flex",
