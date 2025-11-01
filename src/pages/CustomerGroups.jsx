@@ -96,7 +96,8 @@ const US_STATE_NAME_SET = new Set(Object.values(US_STATE_ABBR_TO_NAME));
 const LAYOUT = {
   topRowHeight: 620,
   bottomMinHeight: 760,
-  subPanelMinHeight: 360,
+  subPanelMinHeight: 400,
+  bottomCardHeight: 420,
 };
 
 function toStateName(labelRaw) {
@@ -1564,7 +1565,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
 
           {/* Center focus slider + % */}
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <div style={{ color: THEME.muted }}>Collpase points:</div>
+            <div style={{ color: THEME.muted }}>Collapse points:</div>
             <input
               type="range"
               min={0}
@@ -1984,7 +1985,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
         </div>
       </div>
 
-      {/* Bottom row: Stacked (Attitudes over TP) + Map */}
+      {/* Bottom row: Attitudes (left) + Map (right), then Transaction Price full width */}
       <div
         style={{
           display: "grid",
@@ -1992,26 +1993,28 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
           gap: 16,
           marginTop: 16,
           alignItems: "stretch",
+          gridAutoRows: "minmax(0, auto)",
         }}
       >
-        {/* LEFT: Attitudes (top) + Transaction Price (bottom) */}
+        {/* LEFT: Attitudes (only) */}
         <div
           style={{
             display: "flex",
             flexDirection: "column",
             gap: 16,
-            minHeight: LAYOUT.bottomMinHeight,
+            minHeight: 0,
           }}
         >
-          {/* Attitudes Scatterplot (TOP) */}
+          {/* Attitudes Scatterplot */}
           <div
             style={{
+              position: "relative",
               background: THEME.panel,
               border: `1px solid ${THEME.border}`,
               borderRadius: 12,
               padding: 12,
               flex: 1,
-              minHeight: LAYOUT.subPanelMinHeight,
+              minHeight: "400px",
               boxSizing: "border-box",
               display: "flex",
               flexDirection: "column",
@@ -2034,7 +2037,8 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                   alignItems: "center",
                   fontWeight: 700,
                   fontSize: 22,
-                  marginBottom: 8,
+                  marginTop: 8,
+                  marginBottom: -15,
                   color: THEME.text,
                 }}
               >
@@ -2049,71 +2053,59 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                   alignItems: "flex-start",
                   gap: 6,
                 }}
-              >
-                <label
-                  style={{ display: "flex", alignItems: "center", gap: 6 }}
-                >
-                  <span style={{ fontSize: 12, opacity: 0.85 }}>
-                    X (Loyalty):
-                  </span>
-                  <select
-                    value={attXVar}
-                    onChange={(e) => setAttXVar(e.target.value)}
-                    style={{
-                      height: 26,
-                      width: 250,
-                      fontSize: 12,
-                      borderRadius: 6,
-                      border: `1px solid ${THEME.border}`,
-                      background: THEME.panel,
-                      color: THEME.text,
-                      padding: "0 6px",
-                      outline: "none",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {LOYALTY_VARS.map((v) => (
-                      <option key={v} value={v}>
-                        {varLabel(v)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label
-                  style={{ display: "flex", alignItems: "center", gap: 6 }}
-                >
-                  <span style={{ fontSize: 12, opacity: 0.85 }}>Y (WTP):</span>
-                  <select
-                    value={attYVar}
-                    onChange={(e) => setAttYVar(e.target.value)}
-                    style={{
-                      height: 26,
-                      width: 250,
-                      fontSize: 12,
-                      borderRadius: 6,
-                      border: `1px solid ${THEME.border}`,
-                      background: THEME.panel,
-                      color: THEME.text,
-                      padding: "0 6px",
-                      outline: "none",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {WTP_VARS.map((v) => (
-                      <option key={v} value={v}>
-                        {varLabel(v)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
+              ></div>
             </div>
 
-            <div style={{ flex: 1, minHeight: 0 }}>
+            {/* --- Attitudes chart area --- */}
+            <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+              {/* Dynamic axis combination label */}
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: "50%",
+                  width: "60%",
+                  transform: "translateX(-50%)",
+                  fontStyle: "italic",
+                  fontWeight: 600,
+                  color: THEME.muted,
+                  fontSize: 10,
+                  textAlign: "center",
+                }}
+              >
+                {varLabel(attXVar)}{" "}
+                <span
+                  style={{
+                    fontStyle: "normal",
+                    fontWeight: 400,
+                    margin: "0 6px",
+                  }}
+                >
+                  ×
+                </span>{" "}
+                {varLabel(attYVar)}
+              </div>
+
+              {/* Sample size indicator (top right) */}
+              <div
+                style={{
+                  position: "absolute",
+                  top: 25,
+                  right: 30,
+                  fontSize: 13,
+                  color: THEME.muted,
+                  textAlign: "right",
+                }}
+              >
+                Sample size:{" "}
+                <span style={{ fontWeight: 700, color: THEME.text }}>
+                  {scopeRows.length.toLocaleString()}
+                </span>
+              </div>
+
               <ResponsiveContainer width="100%" height="100%">
                 <ScatterChart
-                  margin={{ top: 0, right: 20, bottom: -10, left: -15 }}
+                  margin={{ top: 50, right: 20, bottom: 25, left: 5 }}
                 >
                   <CartesianGrid stroke={THEME.border} strokeDasharray="4 6" />
                   <XAxis
@@ -2177,219 +2169,102 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                   ))}
                 </ScatterChart>
               </ResponsiveContainer>
-            </div>
-          </div>
 
-          {/* Transaction Price (BOTTOM) */}
-          <div
-            style={{
-              background: THEME.panel,
-              border: `1px solid ${THEME.border}`,
-              borderRadius: 12,
-              padding: 12,
-              flex: 1,
-              minHeight: LAYOUT.subPanelMinHeight,
-              boxSizing: "border-box",
-              display: "flex",
-              flexDirection: "column",
-              position: "relative",
-            }}
-          >
-            <div
-              style={{
-                width: "100%",
-                display: "flex",
-                justifyContent: "center",
-                alignItems: "center",
-                fontWeight: 700,
-                fontSize: 22,
-                marginTop: 8,
-                marginBottom: 0,
-                color: THEME.text,
-              }}
-            >
-              Transaction Price
-            </div>
+              {/* Y-axis: compact dropdown (left) */}
+              <div
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  top: "calc(50% - 50px)",
+                  zIndex: 2,
+                  pointerEvents: "auto",
+                }}
+              >
+                <select
+                  value={attYVar}
+                  onChange={(e) => setAttYVar(e.target.value)}
+                  style={{
+                    height: 24,
+                    width: 20,
+                    fontSize: 12,
+                    borderRadius: 6,
+                    border: `1px solid ${THEME.border}`,
+                    background: THEME.panel,
+                    color: THEME.text,
+                    padding: "0 6px",
+                    outline: "none",
+                    cursor: "pointer",
+                  }}
+                  title="Select Y (WTP)"
+                >
+                  {WTP_VARS.map((v) => (
+                    <option key={v} value={v}>
+                      {varLabel(v)}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-            {/* --- Sample size label (Transaction Price) --- */}
-            <div
-              style={{
-                position: "absolute",
-                top: 40,
-                right: 40,
-                fontSize: 13,
-                fontWeight: 500,
-                color: THEME.muted,
-                pointerEvents: "none",
-              }}
-            >
-              Sample size:{" "}
-              <span style={{ color: THEME.text, fontWeight: 600 }}>
-                {activePriceSampleSize.toLocaleString()}
-              </span>
-            </div>
+              {/* Y-axis: rotated label */}
+              <div
+                style={{
+                  position: "absolute",
+                  left: -5,
+                  top: "54%",
+                  transform: "translateY(-50%) rotate(-90deg)",
+                  transformOrigin: "left top",
+                  zIndex: 1,
+                  pointerEvents: "none",
+                }}
+              >
+                <span
+                  style={{ fontSize: 12, fontWeight: 600, color: THEME.text }}
+                >
+                  WTP
+                </span>
+              </div>
 
-            <div style={{ flex: 1, minHeight: 0 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                {(() => {
-                  const groupingKey =
-                    colorMode === "cluster" ? "cluster" : "model";
-                  const orderKeys = groupKeys;
-                  const series = buildPriceSeriesByGroup(
-                    priceScopeRows,
-                    groupingKey,
-                    orderKeys
-                  );
-
-                  if (!series.length) {
-                    return (
-                      <div style={{ fontSize: 12, opacity: 0.75 }}>
-                        No FIN_PRICE_UNEDITED data available in current scope.
-                      </div>
-                    );
-                  }
-
-                  const maxPct = series.reduce(
-                    (m, s) =>
-                      Math.max(
-                        m,
-                        ...s.data.map((d) =>
-                          Number.isFinite(d.pct) ? d.pct : 0
-                        )
-                      ),
-                    0
-                  );
-                  const yMax = Math.ceil((maxPct + 2) / 5) * 5;
-                  const pctFmt = (v) => `${v.toFixed(0)}%`;
-                  const xLabels = series[0].data.map((d) => d.label);
-
-                  return (
-                    <AreaChart
-                      margin={{ top: 20, right: 20, bottom: -10, left: 0 }}
-                    >
-                      <CartesianGrid
-                        stroke={THEME.border}
-                        strokeDasharray="4 6"
-                        vertical={false}
-                      />
-                      <XAxis
-                        dataKey="label"
-                        type="category"
-                        allowDuplicatedCategory={false}
-                        tick={{ fill: THEME.muted, fontSize: 11 }}
-                        stroke={THEME.border}
-                        interval={0}
-                        angle={-20}
-                        textAnchor="end"
-                        height={52}
-                        ticks={xLabels}
-                      />
-                      <YAxis
-                        domain={[0, yMax]}
-                        tickFormatter={pctFmt}
-                        tick={{ fill: THEME.muted, fontSize: 12 }}
-                        stroke={THEME.border}
-                        allowDecimals={false}
-                      />
-                      <Tooltip
-                        contentStyle={{
-                          background: THEME.bg,
-                          border: `1px solid ${THEME.border}`,
-                          color: THEME.text,
-                          borderRadius: 8,
-                        }}
-                        formatter={(value, name, payload) => {
-                          const pct = Number(value);
-                          const count = payload?.payload?.count ?? 0;
-                          return [
-                            `${pct.toFixed(1)}% (${count.toLocaleString()})`,
-                            name,
-                          ];
-                        }}
-                        labelFormatter={(label) => label}
-                      />
-                      {/* Legend intentionally omitted */}
-
-                      <defs>
-                        {orderKeys.map((k) => {
-                          const id = `priceFill_${String(k).replace(
-                            /\s+/g,
-                            "_"
-                          )}`;
-                          const col =
-                            colorMode === "model"
-                              ? modelColors[String(k)] || THEME.accent
-                              : colorForKey(k, orderKeys);
-                          return (
-                            <linearGradient
-                              key={id}
-                              id={id}
-                              x1="0"
-                              y1="0"
-                              x2="0"
-                              y2="1"
-                            >
-                              <stop
-                                offset="0%"
-                                stopColor={col}
-                                stopOpacity={0.22}
-                              />
-                              <stop
-                                offset="100%"
-                                stopColor={col}
-                                stopOpacity={0}
-                              />
-                            </linearGradient>
-                          );
-                        })}
-                      </defs>
-
-                      {series.map((s) => {
-                        const col =
-                          colorMode === "model"
-                            ? modelColors[String(s.key)] || THEME.accent
-                            : colorForKey(s.key, orderKeys);
-                        const fillId = `url(#priceFill_${String(s.key).replace(
-                          /\s+/g,
-                          "_"
-                        )})`;
-                        const name =
-                          colorMode === "cluster" ? `C${s.key}` : String(s.key);
-                        return (
-                          <React.Fragment key={`series-${String(s.key)}`}>
-                            <Area
-                              type="monotone"
-                              name={name}
-                              data={s.data}
-                              dataKey="pct"
-                              fill={fillId}
-                              stroke="none"
-                              isAnimationActive={true}
-                              animationId={animToken}
-                              animationDuration={650}
-                              animationEasing="ease-in-out"
-                            />
-                            <Line
-                              type="monotone"
-                              name={name}
-                              data={s.data}
-                              dataKey="pct"
-                              stroke={col}
-                              strokeWidth={2}
-                              dot={false}
-                              activeDot={false}
-                              isAnimationActive={true}
-                              animationId={animToken}
-                              animationDuration={650}
-                              animationEasing="ease-in-out"
-                            />
-                          </React.Fragment>
-                        );
-                      })}
-                    </AreaChart>
-                  );
-                })()}
-              </ResponsiveContainer>
+              {/* X-axis label + dropdown below chart */}
+              <div
+                style={{
+                  position: "absolute",
+                  bottom: -1,
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  pointerEvents: "auto",
+                }}
+              >
+                <span
+                  style={{ fontSize: 12, fontWeight: 600, color: THEME.text }}
+                >
+                  Loyalty
+                </span>
+                <select
+                  value={attXVar}
+                  onChange={(e) => setAttXVar(e.target.value)}
+                  style={{
+                    height: 26,
+                    width: 400,
+                    fontSize: 12,
+                    borderRadius: 6,
+                    border: `1px solid ${THEME.border}`,
+                    background: THEME.panel,
+                    color: THEME.text,
+                    padding: "0 6px",
+                    outline: "none",
+                    cursor: "pointer",
+                  }}
+                >
+                  {LOYALTY_VARS.map((v) => (
+                    <option key={v} value={v}>
+                      {varLabel(v)}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
         </div>
@@ -2401,7 +2276,8 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             border: `1px solid ${THEME.border}`,
             borderRadius: 12,
             padding: 12,
-            minHeight: LAYOUT.bottomMinHeight,
+            flex: "0 0 auto",
+            height: LAYOUT.bottomCardHeight,
             boxSizing: "border-box",
             position: "relative",
             display: "flex",
@@ -2566,6 +2442,218 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             <div style={{ display: "flex", alignItems: "center", gap: 8 }} />
           </div>
         </div>
+
+        <div
+          style={{
+            gridColumn: "1 / -1",
+            background: THEME.panel,
+            border: `1px solid ${THEME.border}`,
+            borderRadius: 12,
+            padding: 12,
+            minHeight: LAYOUT.subPanelMinHeight,
+            width: "100%",
+            boxSizing: "border-box",
+            display: "flex",
+            flexDirection: "column",
+            position: "relative",
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              fontWeight: 700,
+              fontSize: 22,
+              marginTop: 8,
+              marginBottom: 0,
+              color: THEME.text,
+            }}
+          >
+            Transaction Price
+          </div>
+
+          {/* --- Sample size label (Transaction Price) --- */}
+          <div
+            style={{
+              position: "absolute",
+              top: 40,
+              right: 40,
+              fontSize: 13,
+              fontWeight: 500,
+              color: THEME.muted,
+              pointerEvents: "none",
+            }}
+          >
+            Sample size:{" "}
+            <span style={{ color: THEME.text, fontWeight: 600 }}>
+              {activePriceSampleSize.toLocaleString()}
+            </span>
+          </div>
+
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              {(() => {
+                const groupingKey =
+                  colorMode === "cluster" ? "cluster" : "model";
+                const orderKeys = groupKeys;
+                const series = buildPriceSeriesByGroup(
+                  priceScopeRows,
+                  groupingKey,
+                  orderKeys
+                );
+
+                if (!series.length) {
+                  return (
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>
+                      No FIN_PRICE_UNEDITED data available in current scope.
+                    </div>
+                  );
+                }
+
+                const maxPct = series.reduce(
+                  (m, s) =>
+                    Math.max(
+                      m,
+                      ...s.data.map((d) => (Number.isFinite(d.pct) ? d.pct : 0))
+                    ),
+                  0
+                );
+                const yMax = Math.ceil((maxPct + 2) / 5) * 5;
+                const pctFmt = (v) => `${v.toFixed(0)}%`;
+                const xLabels = series[0].data.map((d) => d.label);
+
+                return (
+                  <AreaChart
+                    margin={{ top: 20, right: 20, bottom: -10, left: 0 }}
+                  >
+                    <CartesianGrid
+                      stroke={THEME.border}
+                      strokeDasharray="4 6"
+                      vertical={false}
+                    />
+                    <XAxis
+                      dataKey="label"
+                      type="category"
+                      allowDuplicatedCategory={false}
+                      tick={{ fill: THEME.muted, fontSize: 11 }}
+                      stroke={THEME.border}
+                      interval={0}
+                      angle={-20}
+                      textAnchor="end"
+                      height={52}
+                      ticks={xLabels}
+                    />
+                    <YAxis
+                      domain={[0, yMax]}
+                      tickFormatter={pctFmt}
+                      tick={{ fill: THEME.muted, fontSize: 12 }}
+                      stroke={THEME.border}
+                      allowDecimals={false}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        background: THEME.bg,
+                        border: `1px solid ${THEME.border}`,
+                        color: THEME.text,
+                        borderRadius: 8,
+                      }}
+                      formatter={(value, name, payload) => {
+                        const pct = Number(value);
+                        const count = payload?.payload?.count ?? 0;
+                        return [
+                          `${pct.toFixed(1)}% (${count.toLocaleString()})`,
+                          name,
+                        ];
+                      }}
+                      labelFormatter={(label) => label}
+                    />
+                    {/* Legend intentionally omitted */}
+
+                    <defs>
+                      {orderKeys.map((k) => {
+                        const id = `priceFill_${String(k).replace(
+                          /\s+/g,
+                          "_"
+                        )}`;
+                        const col =
+                          colorMode === "model"
+                            ? modelColors[String(k)] || THEME.accent
+                            : colorForKey(k, orderKeys);
+                        return (
+                          <linearGradient
+                            key={id}
+                            id={id}
+                            x1="0"
+                            y1="0"
+                            x2="0"
+                            y2="1"
+                          >
+                            <stop
+                              offset="0%"
+                              stopColor={col}
+                              stopOpacity={0.22}
+                            />
+                            <stop
+                              offset="100%"
+                              stopColor={col}
+                              stopOpacity={0}
+                            />
+                          </linearGradient>
+                        );
+                      })}
+                    </defs>
+
+                    {series.map((s) => {
+                      const col =
+                        colorMode === "model"
+                          ? modelColors[String(s.key)] || THEME.accent
+                          : colorForKey(s.key, orderKeys);
+                      const fillId = `url(#priceFill_${String(s.key).replace(
+                        /\s+/g,
+                        "_"
+                      )})`;
+                      const name =
+                        colorMode === "cluster" ? `C${s.key}` : String(s.key);
+                      return (
+                        <React.Fragment key={`series-${String(s.key)}`}>
+                          <Area
+                            type="monotone"
+                            name={name}
+                            data={s.data}
+                            dataKey="pct"
+                            fill={fillId}
+                            stroke="none"
+                            isAnimationActive={true}
+                            animationId={animToken}
+                            animationDuration={650}
+                            animationEasing="ease-in-out"
+                          />
+                          <Line
+                            type="monotone"
+                            name={name}
+                            data={s.data}
+                            dataKey="pct"
+                            stroke={col}
+                            strokeWidth={2}
+                            dot={false}
+                            activeDot={false}
+                            isAnimationActive={true}
+                            animationId={animToken}
+                            animationDuration={650}
+                            animationEasing="ease-in-out"
+                          />
+                        </React.Fragment>
+                      );
+                    })}
+                  </AreaChart>
+                );
+              })()}
+            </ResponsiveContainer>
+          </div>
+        </div>
+        {/* ⬆⬆⬆ END full-width Transaction Price row */}
       </div>
 
       {/* Persona Modal */}
