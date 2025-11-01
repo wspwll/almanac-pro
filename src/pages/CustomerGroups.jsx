@@ -6,12 +6,7 @@ import {
   CartesianGrid,
   XAxis,
   YAxis,
-  Legend,
-  // histogram bits:
-  BarChart,
-  Bar,
   Tooltip,
-  LineChart,
   Line,
   AreaChart,
   Area,
@@ -125,7 +120,6 @@ function toStateName(labelRaw) {
 }
 
 /* ---------- color helpers ---------- */
-// --- helpers (use your existing ones if present) ---
 const hexToRgbStr = (hex) => {
   const h = hex.replace("#", "");
   const full =
@@ -190,6 +184,16 @@ function blendHex(aHex, bHex, t) {
   });
 }
 
+// --- deterministic "random" color per model (stable across renders) ---
+function hashStr(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h << 5) - h + s.charCodeAt(i);
+    h |= 0; // keep 32-bit
+  }
+  return Math.abs(h);
+}
+
 function colorForKey(key, allKeys) {
   const keyStr = String(key);
   const idx = allKeys.findIndex((k) => String(k) === keyStr);
@@ -198,23 +202,48 @@ function colorForKey(key, allKeys) {
 
 /* ---------- chart helpers ---------- */
 function CentroidDot({ cx, cy, payload, onClick, THEME }) {
+  const accent = THEME.accent;
+  const ringFill = `${THEME.accent}22`;
+  const ringStroke = `${THEME.accent}99`;
+
   return (
-    <g onClick={() => onClick?.(payload)} style={{ cursor: "pointer" }}>
+    <g transform={`translate(${cx}, ${cy})`} style={{ cursor: "pointer" }}>
+      {/* Big invisible hit area to make clicking easy */}
+      <circle r={30} fill="transparent" onClick={() => onClick?.(payload)} />
+
+      {/* Outer ring with subtle glow */}
       <circle
-        cx={cx}
-        cy={cy}
-        r={18}
-        fill={`${THEME.accent}1A`} /* ~10% */
-        stroke={`${THEME.accent}59`} /* ~35% */
+        r={22}
+        fill={ringFill}
+        stroke={ringStroke}
+        strokeWidth={3}
+        filter="url(#centroidGlow)"
+        onClick={() => onClick?.(payload)}
       />
-      <circle cx={cx} cy={cy} r={3} fill={THEME.accent} />
+
+      {/* Inner core dot */}
+      <circle r={6} fill={accent} onClick={() => onClick?.(payload)} />
+
+      {/* Outlined label (C1, C2, …) */}
       <text
-        x={cx}
-        y={cy - 12}
+        y={-16}
         textAnchor="middle"
-        fontSize={12}
+        fontSize={16}
+        fontWeight={800}
+        stroke={THEME.bg}
+        strokeWidth={3}
+        paintOrder="stroke fill"
+        style={{ pointerEvents: "none" }}
+      >
+        {`C${payload.cluster}`}
+      </text>
+      <text
+        y={-16}
+        textAnchor="middle"
+        fontSize={16}
+        fontWeight={800}
         fill={THEME.text}
-        style={{ pointerEvents: "none", opacity: 0.9 }}
+        style={{ pointerEvents: "none" }}
       >
         {`C${payload.cluster}`}
       </text>
@@ -266,6 +295,59 @@ const STATE_KEYS = [
   "ST",
   "st",
 ];
+
+// --- Dummy persona content you can customize per cluster ---
+const PERSONA_BY_CLUSTER = {
+  0: {
+    title: "C0 • Practical Commuters",
+    summary:
+      "Budget-conscious, prioritize reliability and total cost of ownership. Commute-focused, low appetite for premium options.",
+    bullets: [
+      "Top motivations: Value, reliability, low monthly payment",
+      "Demographics: Skews 35–54, suburbs, mixed households",
+      "Prefers: Advanced safety over performance packages",
+      "Channel: Responds to straightforward price/value messaging",
+    ],
+  },
+  1: {
+    title: "C1 • Tech-Forward Early Adopters",
+    summary:
+      "Eager to try new tech, high interest in ADAS and connected features. Comfortable paying extra for innovation.",
+    bullets: [
+      "Top motivations: Technology, innovation, prestige",
+      "Demographics: Skews 25–44, metro, higher income",
+      "Prefers: Feature bundles, subscription services",
+      "Channel: Digital-first, demo/experiential events",
+    ],
+  },
+  2: {
+    title: "C2 • Adventure-Lifestyle",
+    summary:
+      "Outdoor-oriented profiles interested in utility, towing, and rugged looks—even if used on-road most of the time.",
+    bullets: [
+      "Top motivations: Utility, design, brand ethos",
+      "Demographics: Skews 30–50, active lifestyle",
+      "Prefers: All-terrain packages, roof racks, tow options",
+      "Channel: Visual storytelling with lifestyle imagery",
+    ],
+  },
+  // Fallback for any other cluster id:
+  default: {
+    title: "Cluster Persona",
+    summary:
+      "Audience profile for this cluster. Customize with your internal notes, key stats, and recommended messaging.",
+    bullets: [
+      "Motivations: …",
+      "Demographics: …",
+      "Preferred features: …",
+      "Go-to channels: …",
+    ],
+  },
+};
+
+function getPersonaForCluster(id) {
+  return PERSONA_BY_CLUSTER[id] ?? PERSONA_BY_CLUSTER.default;
+}
 
 /** ===== Field Groups for the right-side dropdown ===== */
 const FIELD_GROUPS = {
@@ -569,7 +651,7 @@ const chipFixedCG = (active, baseColor, panelColor, borderColor, textColor) => {
       : "transparent",
     color: textColor,
     cursor: "pointer",
-    fontSize: 13,
+    fontSize: 14,
     transition: "border-color 120ms ease, background-color 120ms ease",
     minWidth: 90,
     textAlign: "center",
@@ -632,11 +714,21 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
     [rows]
   );
 
+  const modelColors = useMemo(() => {
+    const map = {};
+    for (const m of allModels) {
+      const idx = hashStr(m) % SERIES_COLORS.length;
+      map[m] = SERIES_COLORS[idx];
+    }
+    return map;
+  }, [allModels]);
+
   const [selectedModels, setSelectedModels] = useState(allModels);
   const [colorMode, setColorMode] = useState("model"); // default to Model
   const [zoomCluster, setZoomCluster] = useState(null);
   const [centerT, setCenterT] = useState(0);
   const [selectedStateName, setSelectedStateName] = useState(null);
+  const [showPersona, setShowPersona] = useState(false);
 
   // Right-side category
   const [selectedFieldGroup, setSelectedFieldGroup] = useState("Demographics");
@@ -1119,6 +1211,18 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
     return sections;
   }, [scopeRows, demoModel, demoLookups, selectedFieldGroup]);
 
+  const activeSampleSize = plotFrame.length;
+
+  // Price scope (mirrors the demoModel + state-filter scope used in the right panel)
+  const priceScopeRows = useMemo(() => {
+    return demoModel
+      ? scopeRows.filter((r) => r.model === demoModel)
+      : scopeRows;
+  }, [demoModel, scopeRows]);
+
+  // Sample size for the Transaction Price chart
+  const activePriceSampleSize = priceScopeRows.length;
+
   /* ---------- UI ---------- */
   return (
     <div
@@ -1243,8 +1347,10 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             <>
               {/* SUVs / Pickups label */}
               <div style={{ marginTop: 6 }}>
-                <div style={{ color: THEME.muted, marginBottom: 12 }}>
-                  Segments: choose one or more
+                <div
+                  style={{ color: THEME.muted, marginTop: 8, marginBottom: 12 }}
+                >
+                  Choose body style
                 </div>
 
                 <div
@@ -1266,7 +1372,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                       THEME.text
                     )}
                   >
-                    SUVs
+                    SUV
                   </button>
 
                   {/* Pickups */}
@@ -1280,7 +1386,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                       THEME.text
                     )}
                   >
-                    Pickups
+                    Pickup
                   </button>
                 </div>
               </div>
@@ -1298,45 +1404,53 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                 borderRadius: 8,
               }}
             >
-              Segments dataset coming soon — controls and charts below will
-              populate when data is available.
+              Segments dataset coming soon
             </div>
           )}
         </div>
 
         {/* Model buttons */}
         <div>
-          <div style={{ marginBottom: 8, fontWeight: 600 }}>Models:</div>
+          <div style={{ color: THEME.muted, marginTop: 10, marginBottom: 12 }}>
+            Choose models
+          </div>
+
           <div
             style={{
               display: "flex",
-              flexWrap: "wrap",
+              flexWrap: "nowrap",
               gap: 8,
-              maxWidth: 1000,
+              overflowX: "auto",
+              whiteSpace: "nowrap",
+              paddingBottom: 10,
             }}
           >
             {allModels.map((m) => {
               const active = selectedModels.includes(m);
+              const baseColor = modelColors[m] || THEME.accent;
+
               return (
                 <button
                   key={m}
                   onClick={() => toggleModel(m)}
-                  style={{
-                    background: active ? THEME.accent : THEME.panel,
-                    color: active ? THEME.onAccent : THEME.muted,
-                    border: `1px solid ${active ? THEME.accent : THEME.border}`,
-                    borderRadius: 8,
-                    padding: "6px 10px",
-                    cursor: "pointer",
-                    fontSize: 13,
-                  }}
+                  style={chipFixedCG(
+                    active,
+                    baseColor, // border + translucent fill color
+                    THEME.panel, // for contrast logic
+                    THEME.border, // idle border
+                    THEME.text // text color
+                  )}
+                  title={m}
                 >
                   {m}
                 </button>
               );
             })}
           </div>
-          <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+
+          <div
+            style={{ marginTop: 8, marginBottom: 20, display: "flex", gap: 8 }}
+          >
             <button
               onClick={selectAll}
               style={{
@@ -1366,35 +1480,52 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
           </div>
         </div>
 
-        {/* Color mode + Cluster zoom */}
+        {/* Color mode + Cluster zoom + Center focus (spaced row) */}
         <div
           style={{
             display: "flex",
-            gap: 16,
             alignItems: "center",
             flexWrap: "wrap",
+            gap: 40,
+            marginTop: 8,
+            marginBottom: 0,
           }}
         >
-          <label>
-            Color by:&nbsp;
-            <select
-              value={colorMode}
-              onChange={(e) => setColorMode(e.target.value)}
+          {/* Color mode toggle */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div
               style={{
-                background: THEME.panel,
-                color: THEME.text,
+                display: "flex",
+                borderRadius: 999,
                 border: `1px solid ${THEME.border}`,
-                padding: "6px 10px",
-                borderRadius: 8,
+                overflow: "hidden",
               }}
             >
-              <option value="cluster">Cluster</option>
-              <option value="model">Model</option>
-            </select>
-          </label>
+              {["cluster", "model"].map((mode) => {
+                const active = colorMode === mode;
+                return (
+                  <button
+                    key={mode}
+                    onClick={() => setColorMode(mode)}
+                    style={{
+                      background: active ? THEME.accent : "transparent",
+                      color: active ? THEME.onAccent : THEME.text,
+                      border: "none",
+                      padding: "6px 14px",
+                      fontSize: 13,
+                      cursor: "pointer",
+                      transition: "background-color 120ms ease",
+                    }}
+                  >
+                    {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
+          {/* Cluster zoom buttons */}
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontWeight: 600 }}>Cluster zoom:</span>
             <button
               onClick={() => setZoomCluster(null)}
               style={{
@@ -1431,39 +1562,27 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             })}
           </div>
 
-          <div style={{ fontSize: 12, opacity: 0.8 }}>
-            Mode: {datasetMode === "CORE" ? "Core Set" : "Segments"} • Showing{" "}
-            {plotDataCentered.length.toLocaleString()} points
-            {zoomCluster != null ? ` • Zoom: C${zoomCluster}` : ""} • Dataset:{" "}
-            {group}
-          </div>
-        </div>
-
-        {/* Center focus slider */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ fontWeight: 600, minWidth: 110 }}>Center focus:</div>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={centerT}
-            onChange={(e) => setCenterT(parseFloat(e.target.value))}
-            style={{ width: 260 }}
-          />
-          <div
-            style={{
-              width: 50,
-              textAlign: "right",
-              fontVariantNumeric: "tabular-nums",
-            }}
-          >
-            {(centerT * 100).toFixed(0)}%
-          </div>
-          <div style={{ fontSize: 12, opacity: 0.7 }}>
-            {colorMode === "cluster"
-              ? "Collapse to cluster centroids"
-              : "Collapse to model centroids"}{" "}
+          {/* Center focus slider + % */}
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <div style={{ color: THEME.muted }}>Collpase points:</div>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={centerT}
+              onChange={(e) => setCenterT(parseFloat(e.target.value))}
+              style={{ width: 200 }}
+            />
+            <div
+              style={{
+                width: 10,
+                textAlign: "right",
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {(centerT * 100).toFixed(0)}%
+            </div>
           </div>
         </div>
       </div>
@@ -1474,6 +1593,7 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
           display: "flex",
           gap: 16,
           alignItems: "stretch",
+          flex: 1,
           height: LAYOUT.topRowHeight,
         }}
       >
@@ -1484,123 +1604,149 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             background: THEME.panel,
             border: `1px solid ${THEME.border}`,
             borderRadius: 12,
-            padding: 10,
             height: "100%",
             boxSizing: "border-box",
+            position: "relative",
           }}
         >
-          <ResponsiveContainer width="100%" height="100%">
-            <ScatterChart margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
-              <CartesianGrid stroke={THEME.border} />
-              <XAxis
-                type="number"
-                dataKey="emb_x"
-                domain={animX}
-                tickFormatter={() => ""}
-                tickLine={false}
-                axisLine={false}
-                tickMargin={0}
-              />
-              <YAxis
-                type="number"
-                dataKey="emb_y"
-                domain={animY}
-                tickFormatter={() => ""}
-                tickLine={false}
-                axisLine={false}
-                tickMargin={0}
-              />
+          {/* --- Chart Title: Customer Clusters --- */}
+          <div
+            style={{
+              position: "absolute",
+              top: 20,
+              left: 0,
+              width: "100%",
+              textAlign: "center",
+              fontWeight: 700,
+              fontSize: 24,
+              color: THEME.text,
+              pointerEvents: "none",
+            }}
+          >
+            {group === "Pickup" ? "Core Pickup Clusters" : "Core SUV Clusters"}
+          </div>
 
-              <Tooltip
-                cursor={{ stroke: THEME.border }}
-                content={({ active, payload }) => {
-                  if (!active || !payload?.length) return null;
-                  const p = payload[0]?.payload ?? {};
-                  const umapX = Number(p.raw_x);
-                  const umapY = Number(p.raw_y);
-                  const dispX = Number(p.emb_x);
-                  const dispY = Number(p.emb_y);
-                  const seriesName = payload[0]?.name ?? "";
+          {/* --- Sample size label --- */}
+          <div
+            style={{
+              position: "absolute",
+              top: 45,
+              right: 30,
+              fontSize: 13,
+              fontWeight: 500,
+              color: THEME.muted,
+              pointerEvents: "none",
+            }}
+          >
+            Sample size:{" "}
+            <span style={{ color: THEME.text, fontWeight: 600 }}>
+              {activeSampleSize.toLocaleString()}
+            </span>
+          </div>
+
+          {zoomCluster != null && (
+            <button
+              onClick={() => setShowPersona(true)}
+              style={{
+                position: "absolute",
+                top: 10,
+                right: 12,
+                zIndex: 2,
+                background: THEME.panel,
+                color: THEME.text,
+                border: `1px solid ${THEME.border}`,
+                borderRadius: 8,
+                padding: "6px 10px",
+                fontSize: 13,
+                cursor: "pointer",
+                boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+              }}
+              title="Open persona details"
+            >
+              Show Persona
+            </button>
+          )}
+
+          {/* Full-bleed plot area under the title */}
+          <div
+            style={{
+              position: "absolute",
+              top: 55,
+              left: -35,
+              right: 24,
+              bottom: -10,
+            }}
+          >
+            <ResponsiveContainer width="100%" height="100%">
+              <ScatterChart margin={{ top: 14, right: 0, left: 0, bottom: 0 }}>
+                <CartesianGrid stroke={THEME.border} strokeDasharray="4 6" />
+                <XAxis
+                  type="number"
+                  dataKey="emb_x"
+                  domain={animX}
+                  tickFormatter={() => ""}
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={0}
+                />
+                <YAxis
+                  type="number"
+                  dataKey="emb_y"
+                  domain={animY}
+                  tickFormatter={() => ""}
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={0}
+                />
+
+                {series.map((s) => {
+                  const k = s.key;
+                  const data = s.data;
+                  const fillColor =
+                    colorMode === "model"
+                      ? modelColors[String(k)] || THEME.accent
+                      : colorForKey(k, groupKeys);
+
                   return (
-                    <div
-                      style={{
-                        background: THEME.bg,
-                        border: `1px solid ${THEME.border}`,
-                        color: THEME.text,
-                        borderRadius: 8,
-                        padding: "8px 10px",
-                        fontSize: 12,
-                        maxWidth: 240,
+                    <Scatter
+                      key={String(k)}
+                      name={colorMode === "cluster" ? `C${k}` : String(k)}
+                      data={data}
+                      fill={fillColor}
+                      isAnimationActive={false}
+                      onClick={(pt) => {
+                        const clusterVal = pt?.payload?.cluster;
+                        if (Number.isFinite(clusterVal))
+                          setZoomCluster(clusterVal);
                       }}
-                    >
-                      {seriesName && (
-                        <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                          {seriesName}
-                        </div>
-                      )}
-                      <div style={{ opacity: 0.85, marginBottom: 4 }}>
-                        UMAP (raw)
-                      </div>
-                      <div>
-                        UMAP&nbsp;1 (x):{" "}
-                        {Number.isFinite(umapX) ? umapX.toFixed(4) : "—"}
-                      </div>
-                      <div>
-                        UMAP&nbsp;2 (y):{" "}
-                        {Number.isFinite(umapY) ? umapY.toFixed(4) : "—"}
-                      </div>
-                      <div
-                        style={{ opacity: 0.85, marginTop: 8, marginBottom: 4 }}
-                      >
-                        Displayed{centerT > 0 ? " (centered)" : ""}
-                      </div>
-                      <div>
-                        x: {Number.isFinite(dispX) ? dispX.toFixed(4) : "—"}
-                      </div>
-                      <div>
-                        y: {Number.isFinite(dispY) ? dispY.toFixed(4) : "—"}
-                      </div>
-                    </div>
-                  );
-                }}
-              />
-
-              <Legend wrapperStyle={{ color: THEME.text }} />
-              {series.map(({ key, data }) => (
-                <Scatter
-                  key={String(key)}
-                  name={colorMode === "cluster" ? `C${key}` : key}
-                  data={data}
-                  fill={colorForKey(key, groupKeys)}
-                  isAnimationActive={false}
-                  onClick={(pt) => {
-                    const k = pt?.payload?.cluster;
-                    if (Number.isFinite(k)) setZoomCluster(k);
-                  }}
-                  shape={<TinyDot />}
-                />
-              ))}
-              {zoomCluster == null && (
-                <Scatter
-                  data={clusterCentroidsForHotspots}
-                  name=""
-                  legendType="none"
-                  isAnimationActive={false}
-                  shape={(props) => (
-                    <CentroidDot
-                      {...props}
-                      THEME={THEME}
-                      onClick={(p) => {
-                        if (Number.isFinite(p?.cluster))
-                          setZoomCluster(p.cluster);
-                      }}
+                      shape={<TinyDot />}
                     />
-                  )}
-                />
-              )}
-            </ScatterChart>
-          </ResponsiveContainer>
+                  );
+                })}
+
+                {zoomCluster == null && (
+                  <Scatter
+                    data={clusterCentroidsForHotspots}
+                    name=""
+                    legendType="none"
+                    isAnimationActive={false}
+                    shape={(props) => (
+                      <CentroidDot
+                        {...props}
+                        THEME={THEME}
+                        onClick={(p) => {
+                          if (Number.isFinite(p?.cluster))
+                            setZoomCluster(p.cluster);
+                        }}
+                      />
+                    )}
+                  />
+                )}
+              </ScatterChart>
+            </ResponsiveContainer>
+          </div>
         </div>
+
         {/* Right Panel */}
         <div
           style={{
@@ -1880,13 +2026,28 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                 flexWrap: "wrap",
               }}
             >
-              <div style={{ fontWeight: 700 }}>Attitudes Scatterplot</div>
               <div
                 style={{
-                  marginLeft: "auto",
+                  width: "100%",
                   display: "flex",
-                  gap: 8,
-                  flexWrap: "wrap",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  fontWeight: 700,
+                  fontSize: 22,
+                  marginBottom: 8,
+                  color: THEME.text,
+                }}
+              >
+                Customer Loyalty & Willingness to Pay
+              </div>
+
+              <div
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  gap: 6,
                 }}
               >
                 <label
@@ -1899,12 +2060,16 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                     value={attXVar}
                     onChange={(e) => setAttXVar(e.target.value)}
                     style={{
+                      height: 26,
+                      width: 250,
+                      fontSize: 12,
+                      borderRadius: 6,
+                      border: `1px solid ${THEME.border}`,
                       background: THEME.panel,
                       color: THEME.text,
-                      border: `1px solid ${THEME.border}`,
-                      padding: "6px 10px",
-                      borderRadius: 8,
-                      fontSize: 12,
+                      padding: "0 6px",
+                      outline: "none",
+                      cursor: "pointer",
                     }}
                   >
                     {LOYALTY_VARS.map((v) => (
@@ -1923,12 +2088,16 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                     value={attYVar}
                     onChange={(e) => setAttYVar(e.target.value)}
                     style={{
+                      height: 26,
+                      width: 250,
+                      fontSize: 12,
+                      borderRadius: 6,
+                      border: `1px solid ${THEME.border}`,
                       background: THEME.panel,
                       color: THEME.text,
-                      border: `1px solid ${THEME.border}`,
-                      padding: "6px 10px",
-                      borderRadius: 8,
-                      fontSize: 12,
+                      padding: "0 6px",
+                      outline: "none",
+                      cursor: "pointer",
                     }}
                   >
                     {WTP_VARS.map((v) => (
@@ -1944,9 +2113,9 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             <div style={{ flex: 1, minHeight: 0 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <ScatterChart
-                  margin={{ top: 8, right: 12, bottom: 24, left: 12 }}
+                  margin={{ top: 0, right: 20, bottom: -10, left: -15 }}
                 >
-                  <CartesianGrid stroke={THEME.border} />
+                  <CartesianGrid stroke={THEME.border} strokeDasharray="4 6" />
                   <XAxis
                     type="number"
                     dataKey="x"
@@ -1994,7 +2163,11 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                       key={`att-${pt.key}`}
                       name={pt.name}
                       data={[pt]}
-                      fill={pt.color}
+                      fill={
+                        colorMode === "model"
+                          ? modelColors[String(pt.key)] || THEME.accent
+                          : colorForKey(pt.key, groupKeys)
+                      }
                       shape={<BigDot />}
                       isAnimationActive={true}
                       animationId={animToken}
@@ -2019,23 +2192,51 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
               boxSizing: "border-box",
               display: "flex",
               flexDirection: "column",
+              position: "relative",
             }}
           >
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>
+            <div
+              style={{
+                width: "100%",
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
+                fontWeight: 700,
+                fontSize: 22,
+                marginTop: 8,
+                marginBottom: 0,
+                color: THEME.text,
+              }}
+            >
               Transaction Price
+            </div>
+
+            {/* --- Sample size label (Transaction Price) --- */}
+            <div
+              style={{
+                position: "absolute",
+                top: 40,
+                right: 40,
+                fontSize: 13,
+                fontWeight: 500,
+                color: THEME.muted,
+                pointerEvents: "none",
+              }}
+            >
+              Sample size:{" "}
+              <span style={{ color: THEME.text, fontWeight: 600 }}>
+                {activePriceSampleSize.toLocaleString()}
+              </span>
             </div>
 
             <div style={{ flex: 1, minHeight: 0 }}>
               <ResponsiveContainer width="100%" height="100%">
                 {(() => {
-                  const priceRows = demoModel
-                    ? scopeRows.filter((r) => r.model === demoModel)
-                    : scopeRows;
                   const groupingKey =
                     colorMode === "cluster" ? "cluster" : "model";
                   const orderKeys = groupKeys;
                   const series = buildPriceSeriesByGroup(
-                    priceRows,
+                    priceScopeRows,
                     groupingKey,
                     orderKeys
                   );
@@ -2064,9 +2265,13 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
 
                   return (
                     <AreaChart
-                      margin={{ top: 8, right: 8, left: 8, bottom: 56 }}
+                      margin={{ top: 20, right: 20, bottom: -10, left: 0 }}
                     >
-                      <CartesianGrid stroke={THEME.border} />
+                      <CartesianGrid
+                        stroke={THEME.border}
+                        strokeDasharray="4 6"
+                        vertical={false}
+                      />
                       <XAxis
                         dataKey="label"
                         type="category"
@@ -2111,7 +2316,10 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                             /\s+/g,
                             "_"
                           )}`;
-                          const col = colorForKey(k, orderKeys);
+                          const col =
+                            colorMode === "model"
+                              ? modelColors[String(k)] || THEME.accent
+                              : colorForKey(k, orderKeys);
                           return (
                             <linearGradient
                               key={id}
@@ -2137,7 +2345,10 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
                       </defs>
 
                       {series.map((s) => {
-                        const col = colorForKey(s.key, orderKeys);
+                        const col =
+                          colorMode === "model"
+                            ? modelColors[String(s.key)] || THEME.accent
+                            : colorForKey(s.key, orderKeys);
                         const fillId = `url(#priceFill_${String(s.key).replace(
                           /\s+/g,
                           "_"
@@ -2218,7 +2429,21 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
             </button>
           )}
 
-          <div style={{ fontWeight: 700, marginBottom: 8 }}>Geographic map</div>
+          <div
+            style={{
+              width: "100%",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              fontWeight: 700,
+              fontSize: 22,
+              marginTop: 8,
+              marginBottom: 0,
+              color: THEME.text,
+            }}
+          >
+            State of Residence
+          </div>
 
           <div
             style={{
@@ -2302,27 +2527,264 @@ export default function CustomerGroups({ COLORS: THEME, useStyles }) {
               justifyContent: "space-between",
             }}
           >
-            <div style={{ fontSize: 12, opacity: 0.85 }}>
-              {hoverState
-                ? `${hoverState.name}: ${hoverState.pct.toFixed(1)}%${
-                    stateAgg.counts.get(hoverState.name) || 0
-                      ? ` (${(
-                          stateAgg.counts.get(hoverState.name) || 0
-                        ).toLocaleString()})`
-                      : ""
-                  }`
-                : selectedStateName
-                ? `Filtering Demographics to ${selectedStateName} • ${scopeRows.length.toLocaleString()} records`
-                : stateAgg.total > 0
-                ? `States shown: ${
-                    stateAgg.counts.size
-                  } • Records: ${stateAgg.total.toLocaleString()}`
-                : "No state data in current scope"}
+            <div
+              style={{
+                position: "absolute",
+                bottom: 10,
+                right: 14,
+                fontSize: 13,
+                opacity: 0.85,
+                textAlign: "right",
+              }}
+            >
+              {hoverState ? (
+                <>
+                  {hoverState.name}:{" "}
+                  <span style={{ fontWeight: 700 }}>
+                    {hoverState.pct.toFixed(1)}%
+                  </span>
+                  {stateAgg.counts.get(hoverState.name) || 0
+                    ? ` (${(
+                        stateAgg.counts.get(hoverState.name) || 0
+                      ).toLocaleString()})`
+                    : ""}
+                </>
+              ) : selectedStateName ? (
+                `Filtering Demographics to ${selectedStateName} • ${scopeRows.length.toLocaleString()} records`
+              ) : stateAgg.total > 0 ? (
+                <>
+                  Sample size:{" "}
+                  <span style={{ fontWeight: 700 }}>
+                    {stateAgg.total.toLocaleString()}
+                  </span>
+                </>
+              ) : (
+                "No state data in current scope"
+              )}
             </div>
+
             <div style={{ display: "flex", alignItems: "center", gap: 8 }} />
           </div>
         </div>
       </div>
+
+      {/* Persona Modal */}
+      {showPersona && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setShowPersona(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(720px, 94vw)",
+              maxHeight: "84vh",
+              overflowY: "auto",
+              background: THEME.bg,
+              border: `1px solid ${THEME.border}`,
+              borderRadius: 12,
+              boxShadow: "0 12px 28px rgba(0,0,0,0.35)",
+              color: THEME.text,
+            }}
+          >
+            {/* Header */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "14px 16px",
+                borderBottom: `1px solid ${THEME.border}`,
+                position: "sticky",
+                top: 0,
+                background: THEME.bg,
+                borderTopLeftRadius: 12,
+                borderTopRightRadius: 12,
+                zIndex: 1,
+              }}
+            >
+              <div style={{ fontWeight: 800, fontSize: 18 }}>
+                {(() => {
+                  const persona = getPersonaForCluster(zoomCluster);
+                  const groupLabel =
+                    datasetMode === "CORE"
+                      ? group === "SUV"
+                        ? "SUV"
+                        : "Pickup"
+                      : "Segments";
+                  return `${persona.title} — ${groupLabel}`;
+                })()}
+              </div>
+              <button
+                onClick={() => setShowPersona(false)}
+                style={{
+                  background: THEME.panel,
+                  color: THEME.text,
+                  border: `1px solid ${THEME.border}`,
+                  borderRadius: 8,
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+                title="Close"
+              >
+                Close
+              </button>
+            </div>
+
+            {/* Body */}
+            <div style={{ padding: 16, display: "grid", gap: 12 }}>
+              {(() => {
+                const persona = getPersonaForCluster(zoomCluster);
+                return (
+                  <>
+                    <div
+                      style={{
+                        padding: "10px 12px",
+                        background: THEME.panel,
+                        border: `1px solid ${THEME.border}`,
+                        borderRadius: 8,
+                      }}
+                    >
+                      <div style={{ fontSize: 14, opacity: 0.9 }}>
+                        {persona.summary}
+                      </div>
+                    </div>
+
+                    {/* Snapshot chips */}
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <span
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: 999,
+                          fontSize: 12,
+                          border: `1px solid ${THEME.border}`,
+                          background: THEME.panel,
+                        }}
+                      >
+                        Cluster: C{String(zoomCluster)}
+                      </span>
+                      <span
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: 999,
+                          fontSize: 12,
+                          border: `1px solid ${THEME.border}`,
+                          background: THEME.panel,
+                        }}
+                      >
+                        Points shown: {plotFrame.length.toLocaleString()}
+                      </span>
+                      <span
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: 999,
+                          fontSize: 12,
+                          border: `1px solid ${THEME.border}`,
+                          background: THEME.panel,
+                        }}
+                      >
+                        Color by:{" "}
+                        {colorMode === "cluster" ? "Cluster" : "Model"}
+                      </span>
+                    </div>
+
+                    {/* Key Takeaways */}
+                    <div
+                      style={{
+                        background: THEME.panel,
+                        border: `1px solid ${THEME.border}`,
+                        borderRadius: 8,
+                      }}
+                    >
+                      <div
+                        style={{
+                          padding: "10px 12px",
+                          borderBottom: `1px solid ${THEME.border}`,
+                          fontWeight: 700,
+                        }}
+                      >
+                        Key Takeaways
+                      </div>
+                      <ul
+                        style={{
+                          margin: 0,
+                          padding: "10px 26px",
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        {persona.bullets.map((b, i) => (
+                          <li key={i} style={{ marginBottom: 6 }}>
+                            {b}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    {/* Placeholders for future content */}
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: 10,
+                        gridTemplateColumns: "1fr 1fr",
+                      }}
+                    >
+                      <div
+                        style={{
+                          background: THEME.panel,
+                          border: `1px solid ${THEME.border}`,
+                          borderRadius: 8,
+                          padding: 12,
+                        }}
+                      >
+                        <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                          Messaging Angles
+                        </div>
+                        <div style={{ fontSize: 14, opacity: 0.9 }}>
+                          • Value-first CTA
+                          <br />
+                          • Tech/features demo
+                          <br />• Lifestyle visual story
+                        </div>
+                      </div>
+
+                      <div
+                        style={{
+                          background: THEME.panel,
+                          border: `1px solid ${THEME.border}`,
+                          borderRadius: 8,
+                          padding: 12,
+                        }}
+                      >
+                        <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                          Feature Priorities
+                        </div>
+                        <div style={{ fontSize: 14, opacity: 0.9 }}>
+                          • ADAS package
+                          <br />
+                          • Connectivity + app
+                          <br />• Towing/utility options
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
